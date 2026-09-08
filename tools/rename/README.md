@@ -73,6 +73,22 @@ already-used name, or name with no camel-case content. Per-overlay prefix:
 python tools/rename/rename_asciz_strings.py
 ```
 
+### `lint_toml_syms.py`
+Pre-flight that checks every active `func = "..."` (hooks + instruction patches)
+and `stubs = [...]` name in `rogue_squadron.toml` exists in the (post-rename) ELF.
+N64Recomp aborts on the FIRST missing name, so a regen after a rename batch can
+fail one name at a time; this lists ALL misses up front so the toml can be
+reconciled in one pass. **Run it after `llvm-objcopy`, before N64Recomp.**
+
+```sh
+python tools/rename/lint_toml_syms.py            # defaults: rogue_squadron.toml + renamed ELF
+python tools/rename/lint_toml_syms.py <toml> <elf>
+```
+
+Exit 0 = all names present; non-zero = stale names listed (with their toml line
+numbers). This is the guard for the toml↔symbol_files drift that silently broke
+regens before 2026-06-13 (see project memory).
+
 ## Pipeline
 
 The typical loop after editing a `symbol_files/*.txt`:
@@ -84,10 +100,14 @@ llvm-objcopy \
     --redefine-syms="$RSR_REDEFS_PATH" \
     "$ELF" "$ELF"
 
-# 2. Re-run N64Recomp to refresh the C
+# 2. Lint: confirm every toml func=/stub name still resolves post-rename.
+#    Catches stale toml references before N64Recomp aborts on them one-by-one.
+python tools/rename/lint_toml_syms.py rogue_squadron.toml "$ELF"
+
+# 3. Re-run N64Recomp to refresh the C
 "$N64RECOMP_BIN" rogue_squadron.toml
 
-# 3. Build
+# 4. Build
 cmake --build build --config Debug --target RecompiledFuncs -j
 ```
 

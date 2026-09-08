@@ -41,32 +41,6 @@ inline bool env_flag(const char *name) {
     return true;
 }
 
-// Thread name registration on Win32/Linux (`[NAME] ...`,
-// `[RT64] Thread::setCurrentThreadName ...`). Fires ~30 lines at startup
-// per process. Useful when investigating thread-naming crashes; otherwise
-// pure noise. ROGUESQ_LOG_THREADS=1.
-inline bool log_threads() {
-    static const bool v = env_flag("ROGUESQ_LOG_THREADS");
-    return v;
-}
-
-// Thread lifecycle in src/main/main.cpp and threads.cpp
-// (`[DEBUG] osCreateThread`, `[DEBUG] osStartThread`, `[Thread] _thread_func`,
-// `[Thread] about to set name`). 30+ lines at startup. Useful for thread-
-// system bringup / scheduler debugging. ROGUESQ_LOG_THREAD_LIFECYCLE=1.
-inline bool log_thread_lifecycle() {
-    static const bool v = env_flag("ROGUESQ_LOG_THREAD_LIFECYCLE");
-    return v;
-}
-
-// Top-level boot init in main.cpp (`[DEBUG] init_heap`, `[DEBUG] init_saving`,
-// `[DEBUG] calling entrypoint`, `[DEBUG] entrypoint returned`). One-shot at
-// startup. ROGUESQ_LOG_INIT=1.
-inline bool log_init() {
-    static const bool v = env_flag("ROGUESQ_LOG_INIT");
-    return v;
-}
-
 // Legacy LLE DPC trace gate. The dpc_bridge.cpp pretty-printer
 // (`[dpc-pak] ...` etc.) was retired 2026-05-09 alongside the LLE pipeline;
 // the gate is preserved for any future LLE bring-up but currently has no
@@ -92,14 +66,6 @@ inline bool log_rdp_state() {
 // ROGUESQ_LOG_PRESENT=1.
 inline bool log_present() {
     static const bool v = env_flag("ROGUESQ_LOG_PRESENT");
-    return v;
-}
-
-// Watchpoints / probes added during specific bug hunts (`[wp@...]`,
-// `[probe] ...`, `[null-call] ...`). Mostly historical traces; keep gated
-// since they fire repeatedly. ROGUESQ_LOG_PROBES=1.
-inline bool log_probes() {
-    static const bool v = env_flag("ROGUESQ_LOG_PROBES");
     return v;
 }
 

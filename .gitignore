@@ -104,3 +104,8 @@ dumps/
 mqdiag_*.txt
 /.agents
 skills-lock.json
+/wav
+/tools/__pycache__
+/tools/rename
+*.csv
+/tools/validate/__pycache__

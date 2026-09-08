@@ -332,6 +332,7 @@ These were exhaustively investigated before the overlay-dispatch root cause was 
 ### Productive renaming work
 
 - **Auto-generated `func_HHHHHHHH` → human names** in `RecompiledFuncs/funcs_*.c`. The companion decomp project `rogue_squadron64` has partial m2c output and named symbol files. The architecture doc at [docs/game-architecture.md](docs/game-architecture.md) tracks what's known. Renaming reduces the friction of every future debugging session. Recommended approach: pick a memory-map region (e.g. an overlay range or a subsystem like the save/account family), read its functions, pattern-match against m2c output or string references in ROM, propose names that encode meaning (not addresses). Avoid address-encoded names like `clearByteAt801128CC` — they add nothing over `func_HHHHHHHH`. If you can't see semantics, leave the function as `func_*` rather than inventing a name.
+- **Cross-references / disassembly via rizin**: `python tools/rz/rzq.py xrefs <sym|0xADDR>` (who reads/writes/calls it), `callees`, `disasm`, `strrefs`, `funcs`, `raw`. Loads the symbolized `rogue_squadron64/build/roguesquadron.elf`; `--overlay mission|menu|cinematic` picks which overlay sits at 0x800A5130; `--project <file>` caches the 25 s analysis. See [tools/rz/README.md](tools/rz/README.md).
 
 ### Long-tail
 
