@@ -8,6 +8,7 @@
 #include <thread>
 #include <chrono>
 #include <atomic>
+static unsigned g_rs64_audio_underruns = 0;   // dry-queue arrivals (see queue_samples)
 
 #include "ultramodern/ultra64.h"
 #include "ultramodern/ultramodern.hpp"
@@ -401,9 +402,13 @@ static RspExitReason musyx_audio_runner(uint8_t* rdram, uint32_t ucode_addr) {
         double aud_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
         static double s_sum = 0, s_max = 0; static int s_cnt = 0;
         s_sum += aud_ms; ++s_cnt; if (aud_ms > s_max) s_max = aud_ms;
+        // Gap between synth ticks (retrace-thread starvation shows as gaps far above one VI).
+        static auto s_last = t1; static double s_gap_max = 0; static int s_gap_over = 0;
+        { const double gap = std::chrono::duration<double, std::milli>(t1 - s_last).count(); s_last = t1; if (gap > s_gap_max) s_gap_max = gap; if (gap > 40.0) ++s_gap_over; }
         if (s_n <= 6 || (s_n % 64) == 0) {
-            fprintf(stderr, "[musyx-run #%d] audio=%.1fms avg=%.1fms max=%.1fms (n=%d)\n",
-                s_n, aud_ms, s_sum / s_cnt, s_max, s_cnt); fflush(stderr);
+            fprintf(stderr, "[musyx-run #%d] audio=%.1fms avg=%.1fms max=%.1fms (n=%d) tick-gap max=%.0fms over40=%d underruns=%u\n",
+                s_n, aud_ms, s_sum / s_cnt, s_max, s_cnt, s_gap_max, s_gap_over, g_rs64_audio_underruns); fflush(stderr);
+            s_gap_max = 0;
         }
     }
     // Treat UnhandledJumpTarget/Broke as task-complete so sp_complete fires and
@@ -737,6 +742,8 @@ static void queue_samples(int16_t* samples, size_t num_samples) {
     // buffers; SDL was getting 384) — the dominant cause of the underrun/crackle.
     const size_t num_bytes = num_samples * sizeof(int16_t);
     if (audio_device) {
+        // Underrun gauge: the device queue was already dry when this buffer arrived (audible gap).
+        { static int warm = 0; if (++warm > 64 && SDL_GetQueuedAudioSize(audio_device) == 0) ++g_rs64_audio_underruns; }
         // Diagnostic (ROGUESQ_LOG_AUDIO_OUT=1): confirm PCM flows + silence vs content.
         static int s_lo = -1;
         if (s_lo < 0) { const char* e = std::getenv("ROGUESQ_LOG_AUDIO_OUT"); s_lo = (e && e[0] && e[0]!='0') ? 1 : 0; }
@@ -813,9 +820,10 @@ static size_t get_frames_remaining() {
     // scheduling jitter underruns it -> crackle. Under-reporting by a cushion makes the
     // game maintain a DEEPER real queue that rides through jitter. This is the src-side
     // equivalent of raising ultramodern's buffer_offset_frames (which is wrongly left at
-    // the Godot value 0.5). Tunable via ROGUESQ_AUDIO_LATENCY_MS (default 50; 0 = off).
+    // the Godot value 0.5). Tunable via ROGUESQ_AUDIO_LATENCY_MS (default 60; 0 = off). 100 was
+    // audibly late against the picture (2026-09-08); the synth now runs on the retrace thread each VI.
     static int ms = -1;
-    if (ms < 0) { const char* e = std::getenv("ROGUESQ_AUDIO_LATENCY_MS"); ms = (e && e[0]) ? atoi(e) : 100; if (ms < 0) ms = 0; }
+    if (ms < 0) { const char* e = std::getenv("ROGUESQ_AUDIO_LATENCY_MS"); ms = (e && e[0]) ? atoi(e) : 60; if (ms < 0) ms = 0; }
     size_t cushion = (size_t)audio_sample_rate * (unsigned)ms / 1000u;
     return frames > cushion ? frames - cushion : 0;
 }

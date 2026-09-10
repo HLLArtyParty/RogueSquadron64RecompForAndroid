@@ -15,21 +15,6 @@ A static recompilation of **Star Wars: Rogue Squadron** (N64, USA v1.0) built wi
 
 <div align="center">
 
-### Current `main`
-
-<sub>Placeholders. Drop real captures into <code>screenshots/hle-attempt/</code> and update the <code>src</code> values.</sub>
-
-<table>
-  <tr>
-    <td align="center"><img src="https://placehold.co/480x360?text=Attribution+text" alt="Attribution screen"><br/><sub>Attribution screen</sub></td>
-    <td align="center"><img src="https://placehold.co/480x360?text=Factor+5+logo+%2B+explosion" alt="Factor 5 / N64 logo cinematic"><br/><sub>Factor 5 / N64-logo cinematic</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><img src="https://placehold.co/480x360?text=Main+menu" alt="Main menu"><br/><sub>Main menu</sub></td>
-    <td align="center"><img src="https://placehold.co/480x360?text=Textured+model" alt="Textured HOB model"><br/><sub>Textured HOB model</sub></td>
-  </tr>
-</table>
-
 ### [first-attempt](https://github.com/MikeSemicolonD/RogueSquadron64Recomp/tree/first-attempt)
 
 <table>

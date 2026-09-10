@@ -237,6 +237,20 @@ extern "C" void rs64_dbg_backtrace(const char* tag) {
     fflush(stderr);
 }
 
+extern "C" void rs64_wait_gfx_parse(void);   // ultramodern events.cpp: wait for the in-flight RT64 parse
+extern "C" int rs64_gfx_parse_inflight_wait(int ms);
+// Wait for the in-flight RT64 parse from an N64 thread: yield between short slices so higher-priority
+// N64 threads (retrace thread: buffer swap + audio synth) run meanwhile, as hardware preemption would let them.
+extern "C" volatile unsigned g_rs64_pw_calls = 0, g_rs64_pw_waited = 0, g_rs64_pw_ms = 0, g_rs64_pw_timeouts = 0;
+extern "C" void rs64_wait_gfx_parse_yield(uint8_t* rdram, recomp_context* ctx) {
+    ++g_rs64_pw_calls;
+    const DWORD t0 = GetTickCount();
+    for (int i = 0; i < 500; ++i) {
+        if (!rs64_gfx_parse_inflight_wait(1)) { if (i) { ++g_rs64_pw_waited; g_rs64_pw_ms += GetTickCount() - t0; } return; }
+        osYieldThread_recomp(rdram, ctx);
+    }
+    ++g_rs64_pw_timeouts; g_rs64_pw_ms += GetTickCount() - t0;
+}
 extern "C" void osRecvMesg_recomp(uint8_t* rdram, recomp_context* ctx) {
     s32 flags = (s32)ctx->r6;
     const uint32_t q = (uint32_t)ctx->r4;
@@ -253,6 +267,17 @@ extern "C" void osRecvMesg_recomp(uint8_t* rdram, recomp_context* ctx) {
         if (empty) { t0 = GetTickCount(); fprintf(stderr, "[recv-block] tid=%lu q=0x%08X waiting (empty)\n", GetCurrentThreadId(), q); fflush(stderr); }
     }
     ctx->r2 = osRecvMesg(rdram, (int32_t)ctx->r4, (int32_t)ctx->r5, flags);
+    // Frame start (video queue 0x80128CF0, waitForPostSwapAck): the game is about to rebuild the frame
+    // chunks of the buffer slot it just got back. On hardware the RSP finished reading them long ago;
+    // RT64's parse can still be running (2026-09-08: snapshots walk clean, the live parse saw garbage).
+    // Hold the game thread here until no graphics parse is in flight.
+    if (q == 0x80128CF0u && ctx->r2 == 0 && rs64_vi_driven()) {
+        static unsigned s_n = 0; ++s_n;
+        const int before = rs64_gfx_parse_inflight_wait(0);
+        rs64_wait_gfx_parse_yield(rdram, ctx);
+        static const bool s_lg = [](){ const char* e = std::getenv("ROGUESQ_LOG_GFX_TASK"); return e && *e && *e != '0'; }();
+        if (s_lg && (s_n <= 4 || (s_n & (s_n - 1)) == 0)) { fprintf(stderr, "[parse-wait] frame-recv #%u inflight-now=%d | all sites: calls=%u waited=%u timeouts=%u total=%u ms\n", s_n, before, g_rs64_pw_calls, g_rs64_pw_waited, g_rs64_pw_timeouts, g_rs64_pw_ms); fflush(stderr); }
+    }
     // Trace the message TYPE the SP scheduler (0x8011A420) and DP handler (0x8011A408) dequeued: 1/2 = gfx/audio
     // request, 0x81 = SP-done event. Those event sends come from ultramodern, not osSendMesg, so they are invisible otherwise.
     if ((q == 0x8011A420u || q == 0x8011A408u) && ctx->r2 == 0) {
@@ -355,7 +380,11 @@ extern "C" void osViSwapBuffer_recomp(uint8_t* rdram, recomp_context* ctx) {
     // draws to 0x8076A000 but swaps a different pair; redirect so the
     // PresentEarly matcher (rendered colorImg.address == VI fbAddress) finds
     // the rendered attribution buffer instead of an empty display buffer.
-    if (g_current_scene == 9 /* F5_SCENE_ATTRIBUTION */ && (fb & 0x00FFFFFFu) != 0x76A000u) {
+    // 2026-09-08: the attribution VI redirect to 0x8076A000 is OFF by default. The game now renders the
+    // attribution into its own pair (0x66A000/0x5D4000, identical to the hardware golden); redirecting the
+    // VI to 0x76A000 showed a buffer nothing draws into (white page, no legal text). ROGUESQ_ATTRIB_VI_REDIRECT=1 restores.
+    static const bool s_attrib_redirect = [](){ const char* e = std::getenv("ROGUESQ_ATTRIB_VI_REDIRECT"); return e && *e && *e != '0'; }();
+    if (s_attrib_redirect && g_current_scene == 9 /* F5_SCENE_ATTRIBUTION */ && (fb & 0x00FFFFFFu) != 0x76A000u) {
         uint32_t orig = fb;
         fb = 0x8076A000u;
         if (n <= 200 || (n & 63) == 0) {
@@ -1005,7 +1034,7 @@ extern "C" void rs64_idle_pace(void) {
     static int s_sleep_ms = -1;
     if (s_sleep_ms < 0) {
         const char* e = std::getenv("ROGUESQ_ATTRIBUTION_SLEEP_MS");
-        s_sleep_ms = (e && *e) ? std::atoi(e) : 150;
+        s_sleep_ms = (e && *e) ? std::atoi(e) : 0;   // default 0 since 2026-09-08: the attribution is VI-paced once waitForPostSwapAck really waits
         if (s_sleep_ms < 0) s_sleep_ms = 0;
         if (s_sleep_ms > 5000) s_sleep_ms = 5000;
         fprintf(stderr, "[idle-pace] attribution sleep_ms=%d (32 iters ≈ %ds total)\n",
@@ -1651,7 +1680,42 @@ extern "C" void rs64_neutralize_matpool_cimg(uint8_t* rdram, uint32_t dl_phys) {
 // normal for Factor 5 cinematic tasks.
 extern void print_stack_with_symbols(void** frames, USHORT count);
 
+// ROGUESQ_CHECK_CHUNKLIST=1: walk the game's DL chunk free list (head 0x801163B0; a free chunk's
+// first word is the next chunk, second the previous) on every SP task start. This runs on an N64
+// thread, so no game code mutates the list concurrently. The first bad node dumps RDRAM to
+// ROGUESQ_DUMP_RDRAM_PATH (or chunklist_corrupt.bin) for offline blame.
+static void rs64_check_chunk_freelist(uint8_t* rdram) {
+    static const bool s_chk = [](){ const char* e = std::getenv("ROGUESQ_CHECK_CHUNKLIST"); return e && *e && *e != '0'; }();
+    static bool s_dumped = false;
+    if (!s_chk || s_dumped) return;
+    auto rw = [&](uint32_t off) { return *reinterpret_cast<const uint32_t*>(rdram + (off & 0x7FFFFCu)); };
+    uint32_t node = rw(0x1163B0), prev = 0; int steps = 0; const char* why = nullptr;
+    while (node != 0 && steps < 8192) {
+        const uint32_t off = node & 0x00FFFFFFu;
+        if ((node >> 24) != 0x80u || off < 0x400000u || off + 0x108u > 0x800000u) { why = "node outside RDRAM chunk range"; break; }
+        if (steps > 0 && rw(off + 4) != prev) { why = "prev link mismatch"; break; }
+        prev = node; node = rw(off); ++steps;
+    }
+    if (steps >= 8192) why = "list longer than 8192 (cycle)";
+    { static int s_n = 0; if ((++s_n & 15) == 1) { fprintf(stderr, "[chunklist] task %d free=%d\n", s_n, steps); fflush(stderr); } }
+    if (!why) return;
+    s_dumped = true;
+    fprintf(stderr, "[chunklist] CORRUPT at task start: %s: prev=0x%08X bad=0x%08X steps=%d\n", why, prev, node, steps);
+    const char* path = std::getenv("ROGUESQ_DUMP_RDRAM_PATH");
+    FILE* f = fopen(path && *path ? path : "chunklist_corrupt.bin", "wb");
+    if (f) {
+        static uint8_t buf[0x800000];
+        for (uint32_t i = 0; i < sizeof(buf); ++i) buf[i] = rdram[i ^ 3];
+        fwrite(buf, 1, sizeof(buf), f); fclose(f);
+        fprintf(stderr, "[chunklist] dumped RDRAM\n");
+    }
+    fflush(stderr);
+}
+
+extern "C" void rs64_gfx_task_submitted(void);
 extern "C" void osSpTaskStartGo_recomp(uint8_t* rdram, recomp_context* ctx) {
+    rs64_check_chunk_freelist(rdram);
+
     static int s_log = -1;
     if (s_log < 0) {
         const char* e = std::getenv("ROGUESQ_LOG_TASKSUBMIT");
@@ -1729,8 +1793,25 @@ extern "C" void osSpTaskStartGo_recomp(uint8_t* rdram, recomp_context* ctx) {
 // expected; lld-link picks our version). The behavior is identical otherwise.
 extern "C" int32_t osSendMesg(uint8_t* rdram, int32_t mq_, OSMesg mesg, s32 flag);
 
+extern "C" void rs64_gfx_task_submitted(void);
 extern "C" void osSendMesg_recomp(uint8_t* rdram, recomp_context* ctx) {
     rs64_mesg_trace(rdram, "send", (uint32_t)ctx->r4, (int)(s32)ctx->r6, (uint32_t)ctx->r31);
+    // A graphics task counts as in flight from the game's REQUEST (type-1 message to the RSP scheduler
+    // queue), not from osSpTaskStartGo: with an audio task on the RSP the request sits pending while the
+    // game already rebuilds chunks the pending list references (2026-09-08 ring: 0x752B98 E7 -> E9 mid-parse).
+    if ((uint32_t)ctx->r4 == 0x8011A420u) {
+        const uint32_t mp = (uint32_t)ctx->r5;
+        { static const bool s_lg = [](){ const char* e = std::getenv("ROGUESQ_LOG_GFX_TASK"); return e && *e && *e != '0'; }();
+          static unsigned s_hist[256] = {0}; static unsigned s_tot = 0;
+          const int ty = (mp >= 0x80000000u && mp < 0x80800000u) ? rdram[(mp & 0x7FFFFFu) ^ 3] : 255;
+          ++s_hist[ty]; if (s_lg && (++s_tot & 255) == 0) { fprintf(stderr, "[sched-send] total=%u type1=%u type2=%u type0=%u type81=%u other=%u mp=0x%08X tid=%lu" "\n", s_tot, s_hist[1], s_hist[2], s_hist[0], s_hist[0x81], s_tot - s_hist[1] - s_hist[2] - s_hist[0] - s_hist[0x81], mp, GetCurrentThreadId()); fflush(stderr); } }
+        if (mp >= 0x80000000u && mp < 0x80800000u && rdram[(mp & 0x7FFFFFu) ^ 3] == 1u) {
+            rs64_gfx_task_submitted();
+            static const bool s_lg = [](){ const char* e = std::getenv("ROGUESQ_LOG_GFX_TASK"); return e && *e && *e != '0'; }();
+            static unsigned s_n = 0;
+            if (s_lg && ++s_n <= 6) { fprintf(stderr, "[gfx-request #%u] ra=0x%08X tid=%lu\n", s_n, (uint32_t)ctx->r31, GetCurrentThreadId()); fflush(stderr); }
+        }
+    }
     static int s_log_stk = -1;
     if (s_log_stk < 0) {
         const char* e = std::getenv("ROGUESQ_LOG_SENDMESG_STACK");

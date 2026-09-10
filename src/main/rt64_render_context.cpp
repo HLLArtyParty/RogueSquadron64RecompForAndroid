@@ -1,5 +1,6 @@
 #include <memory>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -27,6 +28,9 @@ extern "C" void rs64_dump_rt64_framebuffers(const char* where);
 // the HLE send_dl path right after processDisplayLists as a safety net
 // for CIMGs the pre-process DL walker missed.
 extern "C" void rs64_sanitize_fb_registry(void);
+// Time spent inside processDisplayLists for the last gfx task (reported by the ROGUESQ_LOG_GFX_TASK line).
+extern "C" volatile long long g_rs64_pdl_us; volatile long long g_rs64_pdl_us = 0;
+extern "C" uint8_t* g_rs64_parse_rdram;   // ultramodern events.cpp: RDRAM snapshot for the current parse
 extern "C" int rs64_fb_guards_mask(void);
 extern "C" int rs64_vi_driven(void);
 
@@ -630,12 +634,20 @@ public:
                 rs64_matfreelist_check(app->core.RDRAM, "RT64 send_dl PRE-processDisplayLists");
                 // Strip bogus matpool-targeting SET_COLOR_IMAGE commands so
                 // RT64 never registers a framebuffer over the node pool.
-                rs64_neutralize_matpool_cimg(app->core.RDRAM,
+                // Parse input: the RDRAM snapshot taken at task start (events.cpp) when available.
+                uint8_t* const parseMem = g_rs64_parse_rdram ? g_rs64_parse_rdram : app->core.RDRAM;
+                rs64_neutralize_matpool_cimg(parseMem,
                                              (uint32_t)task->t.data_ptr & 0x3FFFFFF);
-                app->processDisplayLists(app->core.RDRAM,
+                const auto pdl0 = std::chrono::high_resolution_clock::now();
+                app->state->RDRAM = parseMem;
+                app->state->writeBackRDRAM = (parseMem != app->core.RDRAM) ? app->core.RDRAM : nullptr;
+                app->processDisplayLists(parseMem,
                                          task->t.data_ptr & 0x3FFFFFF,
                                          0,
                                          /*isHLE*/ true);
+                app->state->RDRAM = app->core.RDRAM;
+                app->state->writeBackRDRAM = nullptr;
+                g_rs64_pdl_us = (long long)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - pdl0).count();
                 // Catch any garbage CIMG-derived FBs the DL walker missed.
                 // Erase them before the workload's writeback can scribble
                 // over the matpool (or other heap regions).
