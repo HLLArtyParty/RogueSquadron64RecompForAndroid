@@ -73,7 +73,6 @@ RSPRecomp
 
 # Misc
 *.lnk
-/.claude
 
 # Debug captures and logs (developer-local)
 *_log.txt
