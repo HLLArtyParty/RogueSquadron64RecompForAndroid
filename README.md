@@ -15,16 +15,16 @@ A static recompilation of **Star Wars: Rogue Squadron** (N64, USA v1.0) built wi
 
 <div align="center">
 
-### [first-attempt](https://github.com/MikeSemicolonD/RogueSquadron64Recomp/tree/first-attempt)
+### Screenshots
 
 <table>
   <tr>
-    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/main/screenshots/initial-screenshot.PNG"></td>
-    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/main/screenshots/past-initial-screenshot.PNG"></td>
+    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/main/screenshots/progress2/Capture1.PNG"></td>
+    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/main/screenshots/progress2/Capture2.PNG"></td>
   </tr>
   <tr>
-    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/main/screenshots/progress/past-initial-xwing.png"></td>
-    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/main/screenshots/progress/past-initial-factor5-logo.png"></td>
+    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/main/screenshots/progress2/Capture3.PNG"></td>
+    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/main/screenshots/progress2/Capture4.PNG"></td>
   </tr>
 </table>
 </div>
@@ -148,7 +148,7 @@ Build pipeline: `RecompiledFuncs/` (game code as C) and `patches/` (overrides, l
 | Boot → attribution → cinematic → menu | ✅ Reached on most runs without host intervention |
 | Attribution screen | ✅ Legal text renders on black |
 | Factor 5 / N64-logo cinematic | ✅ Textured, with camera motion and explosion. The white backdrop is intended content |
-| Main menu | ✅ Photographic background and title text. A few background tiles are mispositioned |
+| Main menu | ✅ Photographic background and title text. The mispositioned background tiles were untextured `0xB4` quads mis-parsed by the GBI (stride bug, fixed 2026-09-09); they now parse correctly — with some misplaced UVs |
 | In-mission gameplay | ⏳ The attract demo has rendered (untextured terrain, flat models). Not stable |
 | Audio | ✅ SFX and music via the recompiled MusyX synth. The MORT voice codec for subtitled dialogue is not implemented |
 | Input | SDL2 gamepad only |
@@ -158,7 +158,7 @@ Build pipeline: `RecompiledFuncs/` (game code as C) and `patches/` (overrides, l
 ### Open work
 
 1. **Display-list desyncs.** About a dozen per run, typically garbage right after a material sub-DL returns. Root-cause with the DL spec and `f5_dl_walk.py`.
-2. **Model texturing** beyond the cinematic, and the menu tile positioning.
+2. **Model texturing** beyond the cinematic. (see the F5 GBI module)
 3. **MORT voice codec** (per [rerogue](https://github.com/dpethes/rerogue)). `tools/extract_speech_table.py` extracts the table; in-engine decode is the missing piece.
 4. **Retire the defensive KSEG0 pointer guards.** They never fire against hardware-golden runs and are slated for removal via the TOML plus a regen.
 5. **Function renaming** of `func_8XXXXXXX` symbols (see [tools/rename/README.md](tools/rename/README.md)). Run `tools/rename/lint_toml_syms.py` after every batch.
