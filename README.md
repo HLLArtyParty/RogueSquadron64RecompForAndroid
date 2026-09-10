@@ -26,6 +26,9 @@ A static recompilation of **Star Wars: Rogue Squadron** (N64, USA v1.0) built wi
     <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture3.PNG"></td>
     <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture4.PNG"></td>
   </tr>
+  <tr>
+    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture5.PNG"></td>
+  </tr>
 </table>
 </div>
 
