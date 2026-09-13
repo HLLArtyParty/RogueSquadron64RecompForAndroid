@@ -108,3 +108,4 @@ skills-lock.json
 /tools/rename
 *.csv
 /tools/validate/__pycache__
+/plans
