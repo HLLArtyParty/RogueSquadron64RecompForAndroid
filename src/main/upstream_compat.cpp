@@ -1055,6 +1055,27 @@ extern "C" void rs64_idle_pace(void) {
 // int = target FPS.
 extern "C" void rs64_cine_pace(void) {
 #ifdef _WIN32
+    // ROGUESQ_CINE_HOLD_ITER=N (+ optional ROGUESQ_CINE_HOLD_MS, default 15000): when the cinematic
+    // loop reaches iteration N, park the game thread once for HOLD_MS so the exact frame N stays on
+    // screen long enough to screenshot, matched to the RDRAM dump captured at the same iter. Bounded
+    // so it self-releases (watchdogs don't fire).
+    {
+        static long long s_hold_iter = -2; static uint32_t s_hold_ms = 15000; static bool s_held = false;
+        if (s_hold_iter == -2) {
+            const char* e = std::getenv("ROGUESQ_CINE_HOLD_ITER");
+            s_hold_iter = (e && *e) ? std::atoll(e) : -1;
+            const char* m = std::getenv("ROGUESQ_CINE_HOLD_MS");
+            if (m && *m) s_hold_ms = (uint32_t)std::atoll(m);
+        }
+        if (s_hold_iter >= 0 && !s_held && (long long)rs64_cine_iter_get() >= s_hold_iter) {
+            s_held = true;
+            fprintf(stderr, "[cine-hold] freezing at iter %llu for %u ms\n", rs64_cine_iter_get(), s_hold_ms);
+            fflush(stderr);
+            uint64_t end = GetTickCount64() + s_hold_ms;
+            while (GetTickCount64() < end) ::Sleep(100);
+            fprintf(stderr, "[cine-hold] released\n"); fflush(stderr);
+        }
+    }
     static int s_target_fps = -1;
     if (s_target_fps < 0) {
         const char* e = std::getenv("ROGUESQ_CINE_TARGET_FPS");

@@ -17,9 +17,15 @@ ap.add_argument('--tail', type=int, default=24)
 ap.add_argument('--json', action='store_true', help='emit normalized diff-friendly records as JSON')
 ap.add_argument('--b4', choices=('auto', '16', '32'), default='auto',
                 help="0xB4 stride rule: auto=32 if w0&2 else 16 (hardware); 32=live op_b4_quad's unconditional rule (for A/B)")
+ap.add_argument('--tex', action='store_true',
+                help="decode per-face UVs (raw 8.8 + texel) and bound texture state; prints a UV/material summary "
+                     "(with --json, adds st/idx/tex fields to face records). Stream-first UV investigation.")
 a = ap.parse_args()
 d = open(a.dump, 'rb').read()
 def W(x): return struct.unpack('>I', d[x:x+4])[0]
+def s16(v):                       # F5 packs each texcoord halfword as signed 8.8 texels
+    v &= 0xFFFF
+    return v - 0x10000 if (v & 0x8000) else v
 start = (W(0x377C8 + 0x30) if a.addr == 'task' else int(a.addr, 16)) & 0xFFFFFF
 KNOWN = set([0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
              0x11, 0x12, 0x13, 0x14, 0x80, 0xAF, 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA,
@@ -37,6 +43,27 @@ steps = 0; hist = []; unknown = 0; first_unknown = None; faces = 0; rects = 0; e
 # --json: normalize absolute chunk offsets to first-seen ordinals so two dumps of the same logical DL
 # (different allocation addresses) produce identical record streams; real structural differences remain.
 records = []; chunk_ords = {}
+# --tex: running RDP texture state so each textured face can be tagged with the material it draws with,
+# and an aggregate of emitted UVs (raw 8.8 texels + texel = raw/256) to expose flip/swap at a glance.
+tex = {'timg': None, 'fmt': None, 'siz': None, 'line': None, 'tmem': None, 'pal': None,
+       'tile': None, 'w': None, 'h': None, 'sc': None, 'tc': None,
+       'cms': None, 'cmt': None, 'masks': None, 'maskt': None,   # wrap modes + mask (wrap period = 2^mask)
+       'tlut': None, 'uls': None, 'ult': None}                    # palette src; tile-space origin (10.2)
+tex_faces = []                                    # per-face UV+state snapshots (for the summary)
+def snapshot_tex(): return {k: tex[k] for k in tex}
+def decode_face_uv(pc, op, w0, w1):
+    """Return (idx[], st_raw[[s,t]...], texel[[s,t]...]) for a textured face at pc. Mirrors
+    op_bf_tri / op_b4_quad / op_13_quad: st words at +16,+20,+24(,+28); s=hi16, t=lo16 (signed 8.8)."""
+    quad = op in (0xB4, 0x13)
+    if quad:
+        idx = [(w1 >> 24) // 5, ((w1 >> 16) & 0xFF) // 5, ((w1 >> 8) & 0xFF) // 5, (w1 & 0xFF) // 5]
+        words = [W(pc + 16), W(pc + 20), W(pc + 24), W(pc + 28)]
+    else:
+        idx = [((w1 >> 16) & 0xFF) // 5, ((w1 >> 8) & 0xFF) // 5, (w1 & 0xFF) // 5]
+        words = [W(pc + 16), W(pc + 20), W(pc + 24)]
+    st_raw = [[s16(x >> 16), s16(x & 0xFFFF)] for x in words]   # raw signed 8.8 texels
+    texel = [[s / 256.0, t / 256.0] for s, t in st_raw]         # 8.8 -> texel units
+    return idx, st_raw, texel
 def cord(off):
     off &= 0xFFFFFF
     if off not in chunk_ords: chunk_ords[off] = len(chunk_ords)
@@ -102,10 +129,46 @@ while steps < a.max and not ended:
     elif op not in KNOWN:
         unknown += 1; note = 'UNKNOWN'
         if first_unknown is None: first_unknown = (steps, pc)
+    if a.tex:                                     # track RDP texture state as it flows
+        if op == 0xFD:                            # SETTIMG: bound texture image
+            tex['timg'] = w1 & 0xFFFFFF; tex['fmt'] = (w0 >> 21) & 7; tex['siz'] = (w0 >> 19) & 3
+        elif op == 0xF5:                          # SETTILE: fmt/siz/line/tmem/palette + wrap/mask
+            tex['tile'] = (w1 >> 24) & 7; tex['fmt'] = (w0 >> 21) & 7; tex['siz'] = (w0 >> 19) & 3
+            tex['line'] = (w0 >> 9) & 0x1FF; tex['tmem'] = w0 & 0x1FF; tex['pal'] = (w1 >> 20) & 0xF
+            tex['cmt'] = (w1 >> 18) & 3; tex['maskt'] = (w1 >> 14) & 0xF
+            tex['cms'] = (w1 >> 8) & 3;  tex['masks'] = (w1 >> 4) & 0xF
+        elif op == 0xF2:                          # SETTILESIZE: uls/ult/lrs/lrt (10.2) -> W/H texels
+            uls, ult = (w0 >> 12) & 0xFFF, w0 & 0xFFF
+            lrs, lrt = (w1 >> 12) & 0xFFF, w1 & 0xFFF
+            tex['w'] = ((lrs - uls) >> 2) + 1; tex['h'] = ((lrt - ult) >> 2) + 1
+            tex['uls'] = uls; tex['ult'] = ult   # tile-space origin (10.2); nonzero = UV offset
+        elif op == 0xF0:                          # LOADTLUT: current texture image = palette source
+            tex['tlut'] = tex['timg']
+        elif op == 0xBB:                          # G_TEXTURE: s/t scale (stream sends 0 -> full)
+            tex['sc'] = (w1 >> 16) & 0xFFFF; tex['tc'] = w1 & 0xFFFF
+    if a.tex and op in (0xF0, 0xF3, 0xF4):        # emit load records so the palette/pixel sources are visible
+        tile = (w1 >> 24) & 7
+        if op == 0xF0:                            # loadTLUT: src = current image; ncols from lrs
+            rec(kind='load', sub='tlut', op=op, chunk=cord(base),
+                src=('0x%06X' % (tex['timg'] or 0)), tile=tile, ncols=(((w1 >> 12) & 0xFFF) >> 2) + 1)
+        else:                                     # loadBlock/loadTile: src = pixel image
+            rec(kind='load', sub=('block' if op == 0xF3 else 'tile'), op=op, chunk=cord(base),
+                src=('0x%06X' % (tex['timg'] or 0)), tile=tile,
+                uls=(w0 >> 12) & 0xFFF, ult=w0 & 0xFFF, lrs=(w1 >> 12) & 0xFFF, dxt=w1 & 0xFFF)
+    if op == 0x05 and ((w0 >> 16) & 0xFF) == 5:   # terrain tile: 05 05 02=flat quad, 05 05 00=heightfield grid
+        sub = (w0 >> 8) & 0xFF
+        payload = ['0x%08X' % W(pc + 8 + i * 4) for i in range(8)]   # words 2..9 of the 40-byte record
+        rec(kind='terrain', op=op, depth=len(stack), chunk=cord(base),
+            form=('flat' if (sub & 2) else 'grid'), w0=('0x%08X' % w0), w1=('0x%08X' % w1), payload=payload)
     if op in (0xBF, 0xB4, 0x13, 0x08):
         faces += 1
-        rec(kind='face', op=op, depth=len(stack), chunk=cord(base),
-            verts=(3 if op in (0xBF, 0x08) else 4), tex=bool(w0 & 2), stride=ln)
+        r = dict(kind='face', op=op, depth=len(stack), chunk=cord(base),
+                 verts=(3 if op in (0xBF, 0x08) else 4), tex=bool(w0 & 2), stride=ln)
+        if a.tex and (w0 & 2):
+            idx, st_raw, texel = decode_face_uv(pc, op, w0, w1)
+            r['idx'] = idx; r['st'] = st_raw; r['texel'] = texel; r['mat'] = snapshot_tex()
+            tex_faces.append(r)
+        rec(**r)
     elif op in (0xE4, 0xE5):
         rects += 1; rec(kind='rect', op=op, depth=len(stack), chunk=cord(base), stride=ln)
     elif op not in KNOWN:
@@ -115,12 +178,37 @@ while steps < a.max and not ended:
     hist.append('%08X: %08X %08X %s' % (0x80000000 + pc, w0, w1, note))
     if a.verbose: out(hist[-1] + ('  depth=%d' % len(stack)))
     steps += 1; pc += ln
+def tex_summary():
+    """Aggregate emitted UVs per bound material. Flip/swap tells: if t-texel clusters near H (and
+    away from 0) the runtime baked v=1-rawV; an s-range that tracks H (not W) means s/t are swapped."""
+    if not tex_faces: return {'textured_faces': 0}
+    from collections import defaultdict
+    buckets = defaultdict(lambda: {'faces': 0, 's': [1e9, -1e9], 't': [1e9, -1e9]})
+    gs = [1e9, -1e9]; gt = [1e9, -1e9]
+    for f in tex_faces:
+        m = f['mat']
+        key = (m['timg'], m['fmt'], m['siz'], m['w'], m['h'], m['cms'], m['cmt'], m['masks'], m['maskt'])
+        b = buckets[key]; b['faces'] += 1
+        for s, t in f['texel']:
+            b['s'][0] = min(b['s'][0], s); b['s'][1] = max(b['s'][1], s)
+            b['t'][0] = min(b['t'][0], t); b['t'][1] = max(b['t'][1], t)
+            gs[0] = min(gs[0], s); gs[1] = max(gs[1], s); gt[0] = min(gt[0], t); gt[1] = max(gt[1], t)
+    cmname = {0: 'wrap', 1: 'mirror', 2: 'clamp', 3: 'clmir', None: '?'}
+    mats = []
+    for (timg, fmt, siz, w, h, cms, cmt, masks, maskt), b in sorted(buckets.items(), key=lambda kv: -kv[1]['faces']):
+        mats.append({'timg': ('0x%06X' % timg) if timg is not None else None,
+                     'fmt': fmt, 'siz': siz, 'w': w, 'h': h, 'faces': b['faces'],
+                     'cms': cmname[cms], 'cmt': cmname[cmt], 'masks': masks, 'maskt': maskt,
+                     's_texel': [round(b['s'][0], 2), round(b['s'][1], 2)],
+                     't_texel': [round(b['t'][0], 2), round(b['t'][1], 2)]})
+    return {'textured_faces': len(tex_faces),
+            's_texel_range': [round(gs[0], 2), round(gs[1], 2)],
+            't_texel_range': [round(gt[0], 2), round(gt[1], 2)], 'materials': mats}
 if a.json:
-    print(json.dumps({
-        'summary': {'steps': steps, 'faces': faces, 'rects': rects, 'unknown': unknown,
-                    'chunks': len(chunk_ords), 'end': 'clean' if ended else 'runaway'},
-        'records': records,
-    }))
+    summ = {'steps': steps, 'faces': faces, 'rects': rects, 'unknown': unknown,
+            'chunks': len(chunk_ords), 'end': 'clean' if ended else 'runaway'}
+    if a.tex: summ['tex'] = tex_summary()
+    print(json.dumps({'summary': summ, 'records': records}))
 else:
     print('steps=%d faces=%d rects=%d unknown=%d first_unknown=%s end=%s' % (
         steps, faces, rects, unknown, ('step %d @%08X' % (first_unknown[0], 0x80000000 + first_unknown[1])) if first_unknown else None,
@@ -128,3 +216,14 @@ else:
     if first_unknown:
         lo = max(0, first_unknown[0] - a.tail)
         print('--- history before first unknown ---'); print('\n'.join(hist[lo:first_unknown[0] + 4]))
+    if a.tex:
+        s = tex_summary()
+        print('--- UV / material summary ---')
+        print('textured faces=%d  s_texel=%s  t_texel=%s' % (
+            s['textured_faces'], s.get('s_texel_range'), s.get('t_texel_range')))
+        for m in s.get('materials', []):
+            print('  timg=%s fmt=%s siz=%s tile=%sx%s cms=%s/%d cmt=%s/%d faces=%d  s=%s t=%s' % (
+                m['timg'], m['fmt'], m['siz'], m['w'], m['h'],
+                m['cms'], m['masks'], m['cmt'], m['maskt'], m['faces'], m['s_texel'], m['t_texel']))
+        print('read: texels outside [0,tile] need cms/cmt=wrap|mirror with mask=log2(dim); '
+              'clamp there => smear. t near H not 0 => baked v-flip; s tracking H => s/t swap.')

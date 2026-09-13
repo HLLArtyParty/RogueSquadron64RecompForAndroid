@@ -778,6 +778,52 @@ public:
                 app->core.RDRAM[(addr+2) ^ 3] = uint8_t(val >>  8);
                 app->core.RDRAM[(addr+3) ^ 3] = uint8_t(val);
             };
+            // Voice-unstick watchdog. The MORT streamed-voice codec is unimplemented, so a keyed
+            // voiceline's "active" byte (0x80154620) never clears when decode finishes; cutscenes that
+            // wait on isSpeechSlotActive->isVoiceHandleActive wedge with the cutscene gate (0x800B0B28)
+            // frozen while the VI thread keeps drawing. When the gate is stuck for N presents and a voice
+            // is still "active", clear the active byte so the wait releases (each line gets a short
+            // timeout). Runtime-verified: at the demo freeze gateCtr=86, speechFileLoaded=1, 0x154620=1,
+            // voiceId=0x223. Gated ROGUESQ_VOICE_UNSTICK (default on), ROGUESQ_VOICE_UNSTICK_FRAMES.
+            {
+                // OPT-IN ONLY (default off): clearing the voice-active flags does NOT fix the demo/FrontEnd
+                // cutscene freeze — it only trades a hard freeze at gateCtr=86 for the stage re-looping
+                // (gate cycles 0->~86) without advancing. Root cause is the unimplemented MORT codec for
+                // flag=0x01 streamed voicelines (demo line 309); a real fix needs MORT or recompiled
+                // cutscene/voice-completion logic. Kept as a diagnostic lever behind ROGUESQ_VOICE_UNSTICK=1.
+                static int s_vu = -1;
+                if (s_vu < 0) { const char* e = std::getenv("ROGUESQ_VOICE_UNSTICK"); s_vu = (e && e[0] == '1') ? 1 : 0; }
+                if (s_vu && app->core.RDRAM) {
+                    static uint32_t s_lastGate = 0xFFFFFFFFu; static int s_stuck = 0;
+                    const uint32_t gate = rw(0x0B0B28);
+                    if (gate == s_lastGate) ++s_stuck; else { s_stuck = 0; s_lastGate = gate; }
+                    if (gate < 0x100000u && s_stuck >= 8) {
+                        for (int i = 0; i < 8; ++i) ww(0x139B80 + i * 4, 0xFFFFFFFFu);  // voice-handle array -> empty (-1)
+                        app->core.RDRAM[0x154620 ^ 3] = 0;                              // streamed-voice active byte -> 0
+                    }
+                }
+                // Read-only voice-state trace (ROGUESQ_VOICE_STATE_LOG=1): while the cutscene gate is stuck,
+                // dump the speech-slot state table (0x80154620 region: per-slot state + 0x4638 status bytes)
+                // to see which completion transition stalls for the flag=0x01 line. Pure observation.
+                static int s_vs = -1;
+                if (s_vs < 0) { const char* e = std::getenv("ROGUESQ_VOICE_STATE_LOG"); s_vs = (e && e[0] == '1') ? 1 : 0; }
+                if (s_vs && app->core.RDRAM) {
+                    static uint32_t s_lg = 0xFFFFFFFFu; static int s_sk = 0, s_ct = 0;
+                    const uint32_t g = rw(0x0B0B28);
+                    if (g == s_lg) ++s_sk; else { s_sk = 0; s_lg = g; }
+                    if (g < 0x100000u && s_sk >= 8 && s_ct < 40) {
+                        ++s_ct;
+                        char b1[80] = {0}, b2[80] = {0}; int p1 = 0, p2 = 0;
+                        for (int i = 0; i < 8; ++i) p1 += snprintf(b1 + p1, sizeof(b1) - p1, "%02X ", rb(0x154620 + i)); // state/active
+                        for (int i = 0; i < 8; ++i) p2 += snprintf(b2 + p2, sizeof(b2) - p2, "%02X ", rb(0x154638 + i)); // status
+                        const uint32_t vp = rw(0x139010);
+                        fprintf(stderr, "[vstate] gate=%u  slot@154620=[%s] status@154638=[%s] handles=[%08X %08X] speechLoaded=%u voiceId=%04X\n",
+                            g, b1, b2, rw(0x139B80), rw(0x139B84), rb(0xA5121),
+                            ((vp >> 24) == 0x80) ? (unsigned)((rb((vp & 0xFFFFFF) + 0) << 8) | rb((vp & 0xFFFFFF) + 1)) : 0xFFFFu);
+                        fflush(stderr);
+                    }
+                }
+            }
             // ROGUESQ_FORCE_SWAP_FB=1: present the buffer the game last SWAPPED to
             // (g_last_swap_fb) rather than the raw VI_ORIGIN_REG. The post-logo
             // cinematic single-buffers (osViSwapBuffer stays on one fb) but writes

@@ -343,6 +343,32 @@ static RspExitReason musyx_audio_runner(uint8_t* rdram, uint32_t ucode_addr) {
     auto t0 = std::chrono::steady_clock::now();
     RspExitReason boot_r = factor5_boot(rdram, ucode_addr);
     auto t1 = std::chrono::steady_clock::now();
+    // ROGUESQ_DUMP_SYNTH_FRAME=<n>: capture the EXACT synth input (post-boot RDRAM + OSTask) at the
+    // n-th M_AUDTASK so tools/musyx_replay can run the synth offline on a POPULATED command list.
+    // Writes <PATH>.bin (plain big-endian image, file[i]=rdram[i^3]) + <PATH>.task (OSTask, 0x40 BE bytes).
+    {
+        static int s_tgt = -2;
+        if (s_tgt == -2) { const char* e = std::getenv("ROGUESQ_DUMP_SYNTH_FRAME"); s_tgt = e ? atoi(e) : -1; }
+        if (s_tgt >= 0 && s_n == s_tgt) {
+            const char* base = std::getenv("ROGUESQ_DUMP_SYNTH_PATH"); if (!base || !base[0]) base = "dumps/synth_frame";
+            char pb[512]; snprintf(pb, sizeof(pb), "%s.bin", base);
+            FILE* f = fopen(pb, "wb");
+            if (f) { std::vector<uint8_t> img(0x800000); for (uint32_t i = 0; i < 0x800000u; ++i) img[i] = rdram[i ^ 3];
+                     fwrite(img.data(), 1, img.size(), f); fclose(f); }
+            char pt[512]; snprintf(pt, sizeof(pt), "%s.task", base);
+            FILE* g = fopen(pt, "wb");
+            if (g) { const OSTask* t = &g_audio_task; uint8_t tb[0x40]; std::memset(tb, 0, sizeof(tb));
+                     auto put = [&](int off, uint32_t v){ tb[off]=v>>24; tb[off+1]=v>>16; tb[off+2]=v>>8; tb[off+3]=v; };
+                     put(0x00,(uint32_t)t->t.type);        put(0x04,(uint32_t)t->t.flags);
+                     put(0x10,(uint32_t)t->t.ucode);       put(0x14,(uint32_t)t->t.ucode_size);
+                     put(0x18,(uint32_t)t->t.ucode_data);  put(0x1C,(uint32_t)t->t.ucode_data_size);
+                     put(0x28,(uint32_t)t->t.output_buff); put(0x2C,(uint32_t)t->t.output_buff_size);
+                     put(0x30,(uint32_t)t->t.data_ptr);    put(0x34,(uint32_t)t->t.data_size);
+                     fwrite(tb, 1, sizeof(tb), g); fclose(g); }
+            fprintf(stderr, "[synth-frame] dumped task#%d data_ptr=0x%08X size=0x%X -> %s(.bin/.task)\n",
+                    s_n, (uint32_t)g_audio_task.t.data_ptr, (uint32_t)g_audio_task.t.data_size, base); fflush(stderr);
+        }
+    }
     RspExitReason r = musyx_audio(rdram, ucode_addr);
     auto t2 = std::chrono::steady_clock::now();
     // Did the synth produce ANY internal signal? Scan its DMEM work area (accumulation/voice
@@ -762,12 +788,29 @@ static void queue_samples(int16_t* samples, size_t num_samples) {
             auto nowt = std::chrono::steady_clock::now();
             if (!s_init) { s_init = true; s_t0 = nowt; }
             s_tf += num_bytes / 4;
+            // Step-0 cadence probe (ROGUESQ_LOG_AUDIO_OUT): is the 89% a SUSTAINED slow cadence or JITTER
+            // with dropouts? Bucket the inter-call gap of queue_samples (= buffer-production cadence) and
+            // track per-call buffer frames. A tight ~1/60s cluster = sustained-slow; a bimodal spread with
+            // a >25ms tail = jitter/starvation. Also count calls/window to get effective production Hz.
+            static std::chrono::steady_clock::time_point s_last{}; static bool s_lhave = false;
+            static uint32_t s_gh[7] = {0}; static uint32_t s_calls = 0; static uint32_t s_fmin = ~0u, s_fmax = 0; static uint64_t s_fsum = 0;
+            if (s_lhave) {
+                double gms = std::chrono::duration<double, std::milli>(nowt - s_last).count();
+                int b = gms < 5 ? 0 : gms < 10 ? 1 : gms < 15 ? 2 : gms < 20 ? 3 : gms < 25 ? 4 : gms < 40 ? 5 : 6;
+                s_gh[b]++;
+            }
+            s_last = nowt; s_lhave = true;
+            { uint32_t f = num_bytes / 4; s_calls++; s_fsum += f; if (f < s_fmin) s_fmin = f; if (f > s_fmax) s_fmax = f; }
             double el = std::chrono::duration<double>(nowt - s_t0).count();
             if (el >= 2.0) {
-                fprintf(stderr, "[audio-rate] %.0f frames/s (target %u, %.0f%%) | %.1f M_AUDTASK/s\n",
-                    s_tf / el, audio_sample_rate, 100.0 * (s_tf / el) / (audio_sample_rate ? audio_sample_rate : 1), g_audtask_n / el);
+                fprintf(stderr, "[audio-rate] %.0f frames/s (target %u, %.0f%%) | %.1f M_AUDTASK/s | calls=%.1f/s bufFrames min/avg/max=%u/%llu/%u\n",
+                    s_tf / el, audio_sample_rate, 100.0 * (s_tf / el) / (audio_sample_rate ? audio_sample_rate : 1), g_audtask_n / el,
+                    s_calls / el, s_fmin==~0u?0:s_fmin, (unsigned long long)(s_calls?s_fsum/s_calls:0), s_fmax);
+                fprintf(stderr, "[audio-gap] queue_samples inter-call ms buckets <5|5-10|10-15|15-20|20-25|25-40|>40 = %u %u %u %u %u %u %u\n",
+                    s_gh[0], s_gh[1], s_gh[2], s_gh[3], s_gh[4], s_gh[5], s_gh[6]);
                 fflush(stderr);
                 s_t0 = nowt; s_tf = 0; g_audtask_n = 0;
+                for (int i=0;i<7;i++) s_gh[i]=0; s_calls=0; s_fmin=~0u; s_fmax=0; s_fsum=0;
             }
         }
         // Optional PCM->WAV capture for offline music encoding (ROGUESQ_DUMP_PCM=path or 1).
@@ -1591,8 +1634,29 @@ static LONG WINAPI crash_handler(EXCEPTION_POINTERS* ep) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+// Set an env var so the getenv-based knobs below pick it up. The whole program
+// is configured through the environment, not argv, so CLI args are translated here.
+static void set_env(const char* name, const char* value) {
+#ifdef _WIN32
+    _putenv_s(name, value);
+#else
+    setenv(name, value, 1);
+#endif
+}
+
 int main(int argc, char* argv[]) {
-    (void)argc; (void)argv;
+    // Args are translated into the ROGUESQ_* env vars the rest of main reads.
+    //   --mute / -m         silence output (master gain 0)
+    //   NAME=VALUE          set that env var directly
+    for (int i = 1; i < argc; ++i) {
+        const char* a = argv[i];
+        if (!strcmp(a, "--mute") || !strcmp(a, "-m")) {
+            set_env("ROGUESQ_AUDIO_GAIN", "0");
+        } else if (const char* eq = strchr(a, '=')) {
+            std::string name(a, eq - a);
+            set_env(name.c_str(), eq + 1);
+        }
+    }
 
 #ifdef _WIN32
     // Log PE base so we can resolve absolute addresses from SEH logs to RVAs
