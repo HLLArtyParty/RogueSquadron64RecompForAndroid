@@ -72,6 +72,8 @@ they're orthogonal to the log gates above but commonly co-used.
 | `ROGUESQ_SUPPRESS_OOB_CIMG` | off | When set, drops Factor 5 ucode emissions of bogus SET_COLOR_IMAGE commands at HIGH (≥ 0x800000) and LOW (< 0x100000) addresses before they reach RT64. Reduces the iter-810 memory spike but causes a visual regression — the 3D Factor 5 logo no longer renders, since some legitimate Factor 5 lowmem CIMGs are dropped along with the garbage. |
 | `ROGUESQ_FB_GUARDS` | on | Host framebuffer-window guards. Set `0` to disable for A/B comparison against hardware goldens. |
 | `ROGUESQ_F5_CHUNK_BOUND` | on | Factor 5 DL chunk-bounded fetch grammar rule. Set `0` to disable when diagnosing a DL desync. |
+| `ROGUESQ_F5_NON` | off | Force `NoN` (No-Near-clipping) for the Factor 5 ucode: `1` disables the GPU hard near-plane clip and uses the far-plane manual clamp instead. F5 uniquely ships `NoN=false`, so `depthClipEnabled=true` discards large geometry as it approaches the camera (objects "culled / lower-detail up close"). A/B fix for that symptom; matches every other `.NoN` ucode. Applied in `RSP::setGBI` (`lib/rt64/src/hle/rt64_rsp.cpp`). |
+| `ROGUESQ_F5_INTERP` | off | Give each Factor 5 object a stable per-object identity for RT64's 60 fps frame interpolation. F5 never stamps a matrix group, so every object defaults to `G_EX_ID_AUTO` and RT64 greedily geometry-matches similar moving ships across frames → mismatched-pair **smearing/trails** (worst on fast/close objects — the "worse up close" symptom). `1` stamps each per-object modelview (`op_01_matrix`) with a distinct `G_EX_ORDER_LINEAR` id + pos/rot/scale interpolation, resetting the draw-order counter on each projection load. Applied in `lib/rt64/src/gbi/rt64_gbi_f3dfactor5.cpp`. |
 | `ROGUESQ_LLE_FORCE` | off | Route `M_GFXTASK` through the recompiled RSP ucode + `dpc_bridge.cpp` instead of RT64 HLE. Diagnostic only — semi-broken (cinematic tasks hit an unhandled jump). Companions `ROGUESQ_LLE_UNGATED` (skip the attribution-page gate) and `ROGUESQ_LLE_SOLO` (skip the HLE fallthrough). |
 
 ### Boot / attract-demo navigation
@@ -85,6 +87,24 @@ game RDRAM each present, same pattern as the other pokes.
 | `ROGUESQ_CINE_FASTFWD` | `0` | Adds N extra ticks to the VI-retrace count (`0x8011A890`) each present while the intro cutscene is active and its `gateCtr` (`0x800B0B28`) is below the end threshold (`cutscene[0x44]-0xA`). Inflates the cinematic dt so the intro completes NATURALLY in seconds instead of ~6 min headless. Not a skip — the game still sets its own done bits. Use e.g. `=200`. |
 | `ROGUESQ_SKIP_DEMO` | (unset) | Pins `gGameSettings.demoId` (`0x80130B54`) = N (0-5) every present, and pins the wrap counter `unk15` (`0x80130B55`) = 0 so `cycleIdleDemoId` (`0x8006F044`) can't drift the selector — so the attract mode plays (and LOOPS) that demo directly, skipping earlier demos + transitions. `demoId`→level: **0**=Mos Eisley/Tatooine, **1**=Jade Moon, **2**=Kile II, **3**=Taloraan, **4**=Fest, **5**=Trench Run (`dLevelByDemoId` `0x800CD404` = `00 05 07 0A 0B 11`; `gDemoFilenames` `0x80109AE4`). Combine with `ROGUESQ_CINE_FASTFWD` to blast the intro. Example: `ROGUESQ_SKIP_DEMO=1 ROGUESQ_CINE_FASTFWD=200` → Jade Moon in ~2 min. Selector RE in [plans/jade-moon-demo-freeze-plan.md](../plans/jade-moon-demo-freeze-plan.md). |
 | `ROGUESQ_SKIP_TO_JADEMOON` | off | Convenience alias for `ROGUESQ_SKIP_DEMO=1` (the Jade Moon demo — has the structure-explosion freeze under investigation). |
+
+### RT64 raster enhancements (Phase 0)
+
+Opt-in `UserConfiguration` knobs applied in `create_render_context` (`src/main/rt64_render_context.cpp`)
+before `app->setup()`. Raster-only (this build has `RT_ENABLED` off — no RT/DLSS/FSR/XeSS). See
+[plans/rt64-f5-integration-plan.md](../plans/rt64-f5-integration-plan.md). Default baseline is unchanged
+unless set.
+
+| Env Var | Default | Effect |
+|---|---|---|
+| `ROGUESQ_MSAA` | off | Multisample anti-aliasing: `2`/`4`/`8` → MSAA 2x/4x/8x (rounds down; `<2` = None). |
+| `ROGUESQ_RES_SCALE` | (RT64 2x) | Internal render-resolution multiplier; sets `resolution=Manual` + `resolutionMultiplier=<mult>` (e.g. `3.0`). Clamped by RT64's limit in `validate()`. |
+| `ROGUESQ_SSAA` | `1` | Supersample downsample factor (`>=2` renders higher then downsamples — sharper, costlier). |
+| `ROGUESQ_WIDESCREEN` | off | `1` → `aspectRatio=Expand` (fills the window aspect). F5 HUD/2D may need alignment work at non-4:3 (plan Phase 1b). |
+| `ROGUESQ_ASPECT` | (unset) | Force a specific aspect ratio as a decimal `w/h` (e.g. `1.7777`); sets `aspectRatio=Manual`. Takes precedence over `ROGUESQ_WIDESCREEN`. |
+| `ROGUESQ_HDR` | off | `1` → `internalColorFormat=High` (higher-precision internal color target). |
+| `ROGUESQ_TEX_FILTER` | `aa` | Texture filtering: `nearest` / `linear` / `aa` (AntiAliasedPixelScaling). |
+| `ROGUESQ_TEXTURE_PACK` | (unset) | Load an RT64 texture-replacement pack (a directory or `.zip` containing `rt64.json` + DDS/PNG) and enable replacements. F5 loads textures through the normal RDP TMEM path so RT64's content hashes are stable — packs resolve exactly as for a stock-ucode game. Applied after `app->setup()` via `textureCache->loadReplacementDirectories`. Authoring a pack uses RT64's developer dump workflow (see Zelda64Recomp's texture-pack tooling); the loader here is the runtime consumer. |
 
 ## How to add a new debug trace
 

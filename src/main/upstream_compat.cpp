@@ -1370,6 +1370,45 @@ extern "C" void rs64_matpool_alloc_check(unsigned addr, unsigned size) {
 // 0x18-aligned from the pool base. Reports the FIRST corruption seen, plus
 // which texture-material function's entry detected it — so the corrupting
 // function can be bisected from the call sequence.
+// Phase 2 (RT64 per-object interpolation): level-scoped stable id map. Assigns a stable, unique id per
+// persistent gameplay entity (meshInstance pointer) — the identity RT64 interpolation matching needs. The
+// entity pointer is stable within a level (proven via the [lodsel] trace) but the heap reuses addresses
+// across levels, so the map is reset on level change (level id @ 0x80130B70). ROGUESQ_F5_ID_LOG logs
+// first-sightings so we can confirm the id set stabilizes (NEW lines stop after the first frame).
+// See plans/rt64-f5-integration-plan.md.
+static std::map<uint32_t, uint32_t> s_f5_id_map;
+static uint32_t s_f5_id_next = 1;
+static int      s_f5_id_level = -1;
+extern "C" uint32_t rs64_f5_entity_id(uint8_t* rdram, uint32_t entity) {
+    static int s_log = -1;
+    if (s_log < 0) { const char* e = std::getenv("ROGUESQ_F5_ID_LOG"); s_log = (e && *e && *e != '0') ? 1 : 0; }
+    int level = (int)MEM_BU(0, (gpr)(int32_t)0x80130B70);
+    if (level != s_f5_id_level) {
+        s_f5_id_level = level; s_f5_id_map.clear(); s_f5_id_next = 1;
+        if (s_log) { fprintf(stderr, "[f5id] level=%d -> id map reset\n", level); fflush(stderr); }
+    }
+    if (entity < 0x80000000u || entity >= 0x80800000u) return 0;
+    auto it = s_f5_id_map.find(entity);
+    if (it != s_f5_id_map.end()) return it->second;
+    uint32_t id = s_f5_id_next++;
+    s_f5_id_map.emplace(entity, id);
+    if (s_log) { fprintf(stderr, "[f5id] NEW entity=%08X -> id=%u (level=%d, total=%zu)\n",
+                         entity, id, level, s_f5_id_map.size()); fflush(stderr); }
+    return id;
+}
+
+// Broad-coverage variant: hook processSceneNode (the scene-graph per-node visitor). The scene NODE is
+// transient, but node->object (+0x8) is the persistent entity (deduped per frame via object+0x30). Reads
+// the object and assigns it a stable id via the shared level-scoped map. Skips transform/group nodes
+// (object == 0). Measures how much of the ~71-object set the scene graph actually covers vs the
+// per-NPC-type handlers. See plans/rt64-f5-integration-plan.md.
+extern "C" unsigned int rs64_f5_entity_id(uint8_t*, unsigned int);
+extern "C" void rs64_f5_scenenode_id(uint8_t* rdram, unsigned int node) {
+    if (node < 0x80000000u || node >= 0x80800000u) return;
+    unsigned int obj = (unsigned int)MEM_W(0, (gpr)(int32_t)(node + 0x8));
+    if (obj >= 0x80000000u && obj < 0x80800000u) rs64_f5_entity_id(rdram, obj);
+}
+
 extern "C" void rs64_matfreelist_check(uint8_t* rdram, const char* where) {
     static int s_on = -1;
     if (s_on < 0) {

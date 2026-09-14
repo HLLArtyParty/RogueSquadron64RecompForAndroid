@@ -6,6 +6,7 @@
 #include <cstring>
 #include <string_view>
 #include <vector>
+#include <filesystem>
 
 #define HLSL_CPU
 #include "hle/rt64_application.h"
@@ -185,6 +186,64 @@ public:
         app->userConfig.developerMode = debug || dev_mode_on;
         app->userConfig.displayBuffering = RT64::UserConfiguration::DisplayBuffering::Triple;
 
+        // Phase 0 RT64 raster enhancements (config-only; opt-in via env/--set so the default
+        // baseline is unchanged). See plans/rt64-f5-integration-plan.md.
+        {
+            using UC = RT64::UserConfiguration;
+            // ROGUESQ_MSAA=2|4|8: multisample anti-aliasing (default off).
+            if (const char* v = std::getenv("ROGUESQ_MSAA")) {
+                int s = std::atoi(v);
+                app->userConfig.antialiasing = (s >= 8) ? UC::Antialiasing::MSAA8X
+                                             : (s >= 4) ? UC::Antialiasing::MSAA4X
+                                             : (s >= 2) ? UC::Antialiasing::MSAA2X
+                                                        : UC::Antialiasing::None;
+                fprintf(stderr, "[RT64] MSAA=%ux\n", UC::msaaSampleCount(app->userConfig.antialiasing));
+            }
+            // ROGUESQ_RES_SCALE=<mult>: internal render-resolution multiplier (Manual).
+            if (const char* v = std::getenv("ROGUESQ_RES_SCALE")) {
+                double m = std::atof(v);
+                if (m > 0.0) {
+                    app->userConfig.resolution = UC::Resolution::Manual;
+                    app->userConfig.resolutionMultiplier = m;
+                    fprintf(stderr, "[RT64] resolutionMultiplier=%.2f\n", m);
+                }
+            }
+            // ROGUESQ_SSAA=<n>: supersample/downsample factor (>=2 sharper, costlier).
+            if (const char* v = std::getenv("ROGUESQ_SSAA")) {
+                int d = std::atoi(v);
+                if (d >= 1) { app->userConfig.downsampleMultiplier = d; fprintf(stderr, "[RT64] downsample=%d\n", d); }
+            }
+            // ROGUESQ_ASPECT=<w/h> forces a ratio; ROGUESQ_WIDESCREEN=1 expands to the window.
+            if (const char* v = std::getenv("ROGUESQ_ASPECT")) {
+                double a = std::atof(v);
+                if (a > 0.0) {
+                    app->userConfig.aspectRatio = UC::AspectRatio::Manual;
+                    app->userConfig.aspectTarget = a;
+                    fprintf(stderr, "[RT64] aspect=Manual %.4f\n", a);
+                }
+            } else if (const char* w = std::getenv("ROGUESQ_WIDESCREEN")) {
+                if (w[0] && w[0] != '0') {
+                    app->userConfig.aspectRatio = UC::AspectRatio::Expand;
+                    fprintf(stderr, "[RT64] aspect=Expand\n");
+                }
+            }
+            // ROGUESQ_HDR=1: high internal color format.
+            if (const char* v = std::getenv("ROGUESQ_HDR")) {
+                if (v[0] && v[0] != '0') {
+                    app->userConfig.internalColorFormat = UC::InternalColorFormat::High;
+                    fprintf(stderr, "[RT64] HDR internal color format\n");
+                }
+            }
+            // ROGUESQ_TEX_FILTER=nearest|linear|aa: texture filtering.
+            if (const char* v = std::getenv("ROGUESQ_TEX_FILTER")) {
+                std::string_view s(v);
+                if (s == "nearest") app->userConfig.filtering = UC::Filtering::Nearest;
+                else if (s == "linear") app->userConfig.filtering = UC::Filtering::Linear;
+                else if (s == "aa") app->userConfig.filtering = UC::Filtering::AntiAliasedPixelScaling;
+                fprintf(stderr, "[RT64] filtering=%s\n", v);
+            }
+        }
+
         // PresentEarly ON by default. Our cinematic stays on a single VI fb
         // address; without PresentEarly, RT64's updateScreen only pushes a
         // present when VI changes or RDRAM at VI_ORIGIN changes — neither
@@ -245,6 +304,21 @@ public:
                     (int)app->enhancementConfig.f3dex.forceBranch,
                     (int)app->enhancementConfig.textureLOD.scale);
             fflush(stderr);
+
+            // Phase 1: texture packs. ROGUESQ_TEXTURE_PACK=<dir-or-zip> loads an RT64 replacement
+            // directory (rt64.json + DDS/PNG). F5 loads textures through the normal RDP TMEM path, so
+            // RT64's content hashes are stable and replacements resolve the same as a stock-ucode game.
+            // See plans/rt64-f5-integration-plan.md.
+            if (const char* tp = std::getenv("ROGUESQ_TEXTURE_PACK")) {
+                if (tp[0] && app->textureCache) {
+                    std::vector<RT64::ReplacementDirectory> dirs;
+                    dirs.emplace_back(std::filesystem::path(tp));
+                    bool ok = app->textureCache->loadReplacementDirectories(dirs);
+                    app->textureCache->textureMap.replacementMapEnabled = ok;
+                    fprintf(stderr, "[RT64] texture pack '%s' load %s\n", tp, ok ? "OK" : "FAILED");
+                    fflush(stderr);
+                }
+            }
         }
         if (app && app->appWindow) {
             // Diagnostic: dump the post-setup state of RT64's window/filter
