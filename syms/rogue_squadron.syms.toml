@@ -338,7 +338,7 @@ functions = [
     { name = "func_80021F78", vram = 0x80021F78, size = 0xD0 },
     { name = "func_80022048", vram = 0x80022048, size = 0x11C },
     { name = "func_80022164", vram = 0x80022164, size = 0xB8 },
-    { name = "func_8002221C", vram = 0x8002221C, size = 0xF0 },
+    { name = "findAndUnlinkSmallestEntry", vram = 0x8002221C, size = 0xF0 },
     { name = "func_8002230C", vram = 0x8002230C, size = 0x60 },
     { name = "func_8002236C", vram = 0x8002236C, size = 0x28C },
     { name = "func_800225F8", vram = 0x800225F8, size = 0x148 },
@@ -844,7 +844,7 @@ functions = [
     { name = "func_8005AB34", vram = 0x8005AB34, size = 0x874 },
     { name = "func_8005B3A8", vram = 0x8005B3A8, size = 0x174 },
     { name = "func_8005B51C", vram = 0x8005B51C, size = 0x7A8 },
-    { name = "func_8005BCC4", vram = 0x8005BCC4, size = 0x90C },
+    { name = "func_8005BCC4", vram = 0x8005BCC4, size = 0x90C }, # RENAME -> skyHorizonNpcHandler: per-frame sky/horizon+clouds+background handler dispatched by slotDispatcherIter (a1==1 init, 2 teardown, 4 draw @0x8005C378). NOT a spline-walker (old cinematicSplineWalkerNpcHandler guess was wrong; see plans/skybox-not-rendering-plan.md)
     { name = "func_8005C5D0", vram = 0x8005C5D0, size = 0x4C },
     { name = "fake_func_8005C61C", vram = 0x8005C61C, size = 0x4 },
     { name = "func_8005C620", vram = 0x8005C620, size = 0x254 },

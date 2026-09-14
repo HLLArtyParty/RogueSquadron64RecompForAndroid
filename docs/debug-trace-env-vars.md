@@ -26,37 +26,35 @@ ROGUESQ_LOG_DPC=1 ./build/Debug/RogueSquadron64Recomp.exe
 
 To disable: unset, set to `0`, or leave undefined.
 
+**From the command line**: every variable here can also be set without touching
+the environment, by passing it to the executable as `--set NAME=VALUE` (or a
+bare `NAME=VALUE`). These are equivalent:
+
+```
+RogueSquadron64Recomp.exe --set ROGUESQ_LOG_DPC=1
+ROGUESQ_LOG_DPC=1 RogueSquadron64Recomp.exe
+```
+
+The common *user-facing* runtime options (graphics API, frame loop, audio,
+headless helpers) have dedicated `--flags` instead — see `--help` and the README.
+Everything below is debug/diagnostic and stays variable-only.
+
 ## Categories
 
 | Env Var | Default | Tags Enabled | When To Enable |
 |---|---|---|---|
 | `ROGUESQ_LOG_ALL` | off | everything below | Quick "show me everything" — heavy output, OK for one-shot diagnostic. |
-| `ROGUESQ_LOG_THREADS` | off | `[NAME] set_native_thread_name`, `[NAME] wstring`, `[NAME] SetThreadDescription`, `[RT64] Thread::setCurrentThreadName begin/done`, `[RT64] wstring ok` | Thread-name registration crashed (utf-8/utf-16 conversion, COM init). Useful only when investigating thread-naming code. |
-| `ROGUESQ_LOG_THREAD_LIFECYCLE` | off | `[DEBUG] osCreateThread/osStartThread`, `[DEBUG] thread N starting`, `[Thread] _thread_func`, `[Thread] about to set name` | Thread-system bring-up, scheduler-deadlock, or "which thread is doing X" investigations. Fires ~30 lines at startup. |
-| `ROGUESQ_LOG_INIT` | off | `[DEBUG] init_heap done`, `[DEBUG] calling init_saving`, `[DEBUG] init_saving done`, `[DEBUG] calling entrypoint`, `[DEBUG] entrypoint returned` | Game hangs before reaching the entrypoint — these breadcrumbs tell you whether heap setup or save-system init was the last thing to run. |
 | `ROGUESQ_LOG_DPC` | off | `[task-brief]`, `[task]`, `[task#N gfx]`, `[task#N gfx-FULL]`, `[task#N setcombine]`, `[task#N movemem-idx]`, `[task#N hist]`, `[dpc] FULL_SYNC byte sent`, `[dpc] G_SETPRIM/ENV_COLOR`, `[dpc] PRIM override`, `[dpc] SET_COLOR/DEPTH/TEXTURE_IMAGE`, `[dpc-pak] *`, `[dpc-cine] ENTER`, `[dpc-64tri] ENTER`, `[trace] cinematic_drv ENTRY/BEFORE/AFTER` | Tracing what GFX commands the Factor5 LLE ucode emits. **Highest-volume category** — easily 1000+ lines/sec during cinematic. Use when investigating combiner muxes, texture loads, task pacing, or per-task tri/texrect counts. |
 | `ROGUESQ_LOG_RDP_STATE` | off | `[trace] setCombine #N mux=...`, `[trace] setOtherMode #N cycleType=...`, `[texfilt] tf=...`, `[particle-mux] otherMode...` | RDP-state diagnosis — which combiner/cycleType is active when a specific draw fires. Useful when correlating "what mux runs at frame X" or "did texfilt change between expected and actual". |
 | `ROGUESQ_LOG_PRESENT` | off | `[trace] RT64::Present #N swapIdx=...`, `[trace] PresentQueue::frame #N`, `[trace] Present::lookup`, `[trace] PresentQ::regfb/scratch`, `[trace] fbReg`, `[vi-status] word=...` | VI presentation / framebuffer routing investigations. The buffer-arbiter bug was diagnosed via these traces. Fires ~60 lines/sec. |
 | `ROGUESQ_LOG_SP_TASKS` | off | `[sp] osSpTaskStartGo #N kind=GFX...` | Task-scheduling rate (cinematic ~30/s, normal play 1-2/frame). Useful when tracking how often the game submits GFX tasks to the RSP. |
-| `ROGUESQ_HWBP` | off | `[hwbp] watching VA ...`, `[hwbp-hit #N] tid=... stack trace` | Hardware-breakpoint watchdog on `rdram + ROGUESQ_HWBP_ADDR` (default 0x3CBC4) — fires a symbolicated stack trace on every write to that address. Use when tracking memory corruption to find the writer. Heavy: kernel-mode debug-register churn. |
-| `ROGUESQ_HWBP_ADDR` | `0x3CBC4` | (companion to `ROGUESQ_HWBP`) | Hex address (offset into RDRAM) to watch. Set both to enable a custom watchpoint, e.g. `ROGUESQ_HWBP=1 ROGUESQ_HWBP_ADDR=0x4B7848`. |
-| `ROGUESQ_LOG_FRAME_RATE` | off | `[rate] swap=N/s sample=M/s fb=...` | Once-per-second telemetry of `osViSwapBuffer` and VI-tick rates. Useful when investigating producer/consumer imbalance during cinematic. |
 | `ROGUESQ_LOG_PIPELINE` | off | `[pipe-1]`, `[pipe-2]`, `[pipe-3]` stage counters in RT64 framebuffer renderer | Per-stage TEXRECT pipeline counters (push → GPU draw). Used to verify the pipeline isn't dropping cinematic content between submission and rasterization. |
-| `ROGUESQ_LOG_PROBES` | off | `[wp@*]` watchpoint probes in `funcs_*.c` | Per-call value-change watchpoint probes inserted during the iter-810 freeze investigation. Volume is naturally bounded (only fire on transitions) but useful to gate if you want a quieter run. Same flag is checked from `src/main/debug_logs.h`. |
-| `ROGUESQ_LOG_RT64_ALLOC` | off | `[rt64-alloc] interpolatedColorTargets/nativeSwappedRAM/rdramData/BufferPair/RT::setupColor/setupDepth` | RT64 allocation hotspots — emit `[rt64-alloc]` log lines whenever an allocator commits ≥ 1 MB. Used to find allocation spikes. Lives in 5 sites across `lib/rt64/src/{hle,render}/`. |
-| `ROGUESQ_LOG_TEXBYTES` | off | `[trace] tex bytes ...` | First 32 bytes of texture data at SETTIMG addresses, for diagnosing wrong/missing assets. |
-
-### Cinematic-loop checkpoints
-
-These were added during the iter-810 freeze investigation and live in
-`E:/Projects/N64Recomp/RecompiledFuncs/funcs_27.c`. They get clobbered on
-N64Recomp regeneration — see [audit-changes.md](audit-changes.md) for the
-preservation strategy.
-
-| Env Var | Default | Tags Enabled | When To Enable |
-|---|---|---|---|
-| `ROGUESQ_LOG_CINE_CP` | off | `[cp] iter=N cpNN-...` | Per-call-site checkpoints inside `func_800A5D80`'s cinematic loop body. The last `[cp]` line before silence identifies which call hangs. ~30 sites. |
-| `ROGUESQ_LOG_CINE_CP_FROM` | `800` | (companion to `ROGUESQ_LOG_CINE_CP`) | Iter at which to start verbose logging. Each site prints once before the cutoff for sanity, then prints every iter from this point on. Set lower for full traces, higher to focus on the freeze window. |
+| `ROGUESQ_LOG_GBI` | off | per-handler GBI command logs | Every Factor 5 GBI handler as it fires. **Very high volume.** Use when auditing which opcodes run in a phase. |
+| `ROGUESQ_LOG_GFX_TASK` | off | one line per graphics task | Low-volume task-submission trace; pair with queue diagnostics. |
+| `ROGUESQ_LOG_MESG_TRACE` | off | thread/message-order trace | Message-order trace for `tools/validate/compare_mesg_trace.py`. Scope to frames with `ROGUESQ_MESG_TRACE_FRAMES=lo-hi`. |
+| `ROGUESQ_MESG_TRACE_FRAMES` | all | (companion to `ROGUESQ_LOG_MESG_TRACE`) | Frame window `lo-hi` to limit the message-order trace. |
+| `ROGUESQ_DUMP_FRAME_DL` | off | one-shot display-list dump | Dump the display list for frame `N` to disk for offline `f5_dl_walk.py` inspection. |
+| `ROGUESQ_DUMP_TEXTURES` | off | one-shot texture dump | Write loaded textures to disk once, for asset diffing. |
 
 ## Workaround / experiment env vars (separate from logging)
 
@@ -65,25 +63,28 @@ they're orthogonal to the log gates above but commonly co-used.
 
 | Env Var | Default | Effect |
 |---|---|---|
-| `ROGUESQ_SHADE_FIX` | `10` | Per-vertex SHADE attribute transform. `0` = disabled. `4-10` = various transforms (see [rt64_gbi_rdp.cpp:563-707](../../../Projects/RogueSquadron64Recomp/lib/rt64/src/gbi/rt64_gbi_rdp.cpp#L563-L707)). Mode 10 broadcasts SHADE = 1.0 (TEXEL passthrough) and is the current default that lets the cinematic render. |
-| `ROGUESQ_PARTICLE_FIX` | on | Surgically rewrites alpha-D in mux `0xFC11FE23` (cinematic-particle TEXRECT setup variant) from ZERO to TEXEL0_ALPHA. See [rt64_rdp.cpp:360+](../../../Projects/RogueSquadron64Recomp/lib/rt64/src/hle/rt64_rdp.cpp#L360). Found redundant in practice — actual rendering uses a different mux. |
-| `ROGUESQ_PARTICLE_DEBUG` | off | Forces alpha-D = ONE (opaque blocks) in mux `0xFC11FE23`. High-visibility diagnostic — particle rectangles render as solid colored squares. Found ineffective (mux mismatch). |
-| `ROGUESQ_TEXRECT_ALPHA_FIX` | on | Rewrites alpha-A from SHADE → ONE in mux `0xFC119623` (the actual cinematic-particle render mux). Confirmed firing 10000+ times during cinematic. Whether visually effective is still being investigated. |
 | `ROGUESQ_VI_FOLLOW_DRAW` | `1` | VI-presentation override picker. `0` = original VI/0x66A000 lookup. `1` (default) = override only when VI's fb is stale (not in recently-written set). `2` = aggressive — always pick most-recent color fb. `3` = freshness mode — pick whichever Framebuffer in the manager has the highest `lastWriteTimestamp`, decoupled from `colorImageAddressVector` (use when modes 1/2 don't keep VI on a fresh fb because the workload's pairs aren't `interpolationCandidate` and so the vector stays empty). Workaround for the cinematic buffer-arbiter bug. |
-| `ROGUESQ_LOG_VI_FRESH` | off | Diagnostic. At each VI present, log the chosen fb's `lastWriteTimestamp` vs the freshest color fb in the manager (positive `lag` = VI is presenting a stale fb while a newer one exists). Also logs `colorImageAddressVector` size to confirm whether VI-follow modes 1/2 even have candidates to pick. Throttled to first 20 + every 60th. |
 | `ROGUESQ_PRIM_FF` | off | Force PRIM_COLOR RGB to (FF,FF,FF) keeping alpha. Tests whether the warm off-white tint accounts for "less saturated reds" gap from ideal. |
 | `ROGUESQ_NO_SYNTH_FULLSYNC` | off | Disables the synthetic-fullsync injection in dpc_bridge.cpp. |
-| `ROGUESQ_SHADE_FALLOFF` / `ROGUESQ_SHADE_AMBIENT` / `ROGUESQ_SHADE_SLOPE` | various | Tuning knobs for SHADE_FIX modes 8-9 (env-mapped magnitude). |
-| `ROGUESQ_FILLCOLOR_DEBUG` | off | Forces every FILL_COLOR write to a fixed value. `1` = red (`0xF801F801`, two 5551 reds). Pass an arbitrary 32-bit hex (`0xAABBCCDD`) for any color. Reveals where FILL-mode draws land — the cinematic uses FILL-mode for its background, so setting red shows the whole cutscene bg as red with geometry on top. Doubles as a useful sanity check that the rasterizer reaches the displayed fb. |
-| `ROGUESQ_PARTICLE_VISIBLE_DEBUG` | off | Diagnostic. Rewrites the cinematic-pass mux family (low-half `0xFC127FFF` or `0xFC11FE23`) so it outputs PRIM color at alpha=1.0 unconditionally. If sprites turn into PRIM-colored blocks, the pipeline reaches the displayed fb; if no change, sprites land in a non-displayed fb or aren't being rasterized. |
 | `ROGUESQ_VI_FORCE_FB` | off | Diagnostic. Forces VI to present a specific RDRAM fb regardless of VI_ORIGIN. Use as `ROGUESQ_VI_FORCE_FB=0x80695C00`. Bypasses the cinematic buffer-arbiter bug to test "explosion sprites land in fb X but VI never shows X" hypotheses. Strips upper-half virtual prefix automatically. |
 | `ROGUESQ_NO_FULLSCREEN_FILLRECT` | off | Diagnostic. Suppresses full-screen FillRect (rect covers entire color target). Modes: `1`/`all` = skip every full-screen FillRect (causes Memory Pak attribution to ghost-trail since clears are needed there); `cinematic` = skip only when target is cinematic color fb 0x0062B800 / 0x00695C00 (preserves attribution clears, exposes cinematic content). Tests sub-frame-overwrite hypothesis for cinematic explosions. Partial FillRects always execute. |
-| `ROGUESQ_VI_FOLLOW_INCLUDE_FILLS` | off | Restores legacy VI-follow behavior. By default, fillOnly fbpairs are excluded from the VI-follow candidate list (so VI doesn't pick a just-cleared cinematic buffer when the actual content is in a sprite-rendering fbpair earlier in the workload). Set to `1` to include fillOnly pairs again. |
-| `ROGUESQ_FILLRECT_DEBUG` | off | Forces every FillRect to a fixed magenta. Visual sanity check: any cinematic frame with FillRect activity glows magenta. Lives in `rt64_framebuffer_renderer.cpp`. |
-| `ROGUESQ_DISABLE_Z_CMP` | off | Forces Z_CMP and Z_UPD bits OFF in `setOtherModeL`. Diagnostic for "is geometry being z-killed" hypotheses. |
 | `ROGUESQ_FULL_DUMP` | off | When a crash dump is written (SEH handler, SIGABRT, F12), `=1` produces a full-memory minidump (~5 GB) instead of the default lite dump. Use only when you need RDRAM contents for postmortem. |
 | `ROGUESQ_SUPPRESS_OOB_CIMG` | off | When set, drops Factor 5 ucode emissions of bogus SET_COLOR_IMAGE commands at HIGH (≥ 0x800000) and LOW (< 0x100000) addresses before they reach RT64. Reduces the iter-810 memory spike but causes a visual regression — the 3D Factor 5 logo no longer renders, since some legitimate Factor 5 lowmem CIMGs are dropped along with the garbage. |
-| `ROGUESQ_SWAP_SHADE` | off | **Legacy alias** for `ROGUESQ_SHADE_FIX=1`. Prefer setting `SHADE_FIX` directly. Kept because old logs reference it. |
+| `ROGUESQ_FB_GUARDS` | on | Host framebuffer-window guards. Set `0` to disable for A/B comparison against hardware goldens. |
+| `ROGUESQ_F5_CHUNK_BOUND` | on | Factor 5 DL chunk-bounded fetch grammar rule. Set `0` to disable when diagnosing a DL desync. |
+| `ROGUESQ_LLE_FORCE` | off | Route `M_GFXTASK` through the recompiled RSP ucode + `dpc_bridge.cpp` instead of RT64 HLE. Diagnostic only — semi-broken (cinematic tasks hit an unhandled jump). Companions `ROGUESQ_LLE_UNGATED` (skip the attribution-page gate) and `ROGUESQ_LLE_SOLO` (skip the HLE fallthrough). |
+
+### Boot / attract-demo navigation
+
+Levers to reach a specific attract-mode demo fast (instead of the ~5-min boot → intro → menu → demo-1 →
+transition → demo-2 gauntlet). All live in `update_screen` (`src/main/rt64_render_context.cpp`) and poke
+game RDRAM each present, same pattern as the other pokes.
+
+| Env Var | Default | Effect |
+|---|---|---|
+| `ROGUESQ_CINE_FASTFWD` | `0` | Adds N extra ticks to the VI-retrace count (`0x8011A890`) each present while the intro cutscene is active and its `gateCtr` (`0x800B0B28`) is below the end threshold (`cutscene[0x44]-0xA`). Inflates the cinematic dt so the intro completes NATURALLY in seconds instead of ~6 min headless. Not a skip — the game still sets its own done bits. Use e.g. `=200`. |
+| `ROGUESQ_SKIP_DEMO` | (unset) | Pins `gGameSettings.demoId` (`0x80130B54`) = N (0-5) every present, and pins the wrap counter `unk15` (`0x80130B55`) = 0 so `cycleIdleDemoId` (`0x8006F044`) can't drift the selector — so the attract mode plays (and LOOPS) that demo directly, skipping earlier demos + transitions. `demoId`→level: **0**=Mos Eisley/Tatooine, **1**=Jade Moon, **2**=Kile II, **3**=Taloraan, **4**=Fest, **5**=Trench Run (`dLevelByDemoId` `0x800CD404` = `00 05 07 0A 0B 11`; `gDemoFilenames` `0x80109AE4`). Combine with `ROGUESQ_CINE_FASTFWD` to blast the intro. Example: `ROGUESQ_SKIP_DEMO=1 ROGUESQ_CINE_FASTFWD=200` → Jade Moon in ~2 min. Selector RE in [plans/jade-moon-demo-freeze-plan.md](../plans/jade-moon-demo-freeze-plan.md). |
+| `ROGUESQ_SKIP_TO_JADEMOON` | off | Convenience alias for `ROGUESQ_SKIP_DEMO=1` (the Jade Moon demo — has the structure-explosion freeze under investigation). |
 
 ## How to add a new debug trace
 
@@ -126,5 +127,5 @@ These always print regardless of env vars — don't gate them:
 - **`[CRASH]`, `[ABORT]`** — crash handler / SIGABRT path. Always need these for postmortem.
 - **`[CRT_REPORT]`, `[INVALID_PARAM]`** — CRT debug-report hooks; rare and serious.
 - **`[Audio] SDL_OpenAudioDevice failed`, `[ROM] Imported`, `[F12] manual minidump requested`** — one-shot user-facing events.
-- **`[exp mode=N]`, `[particle-fix]`, `[texrect-alpha-fix]`, `[vi-follow-draw mode=N]`** — workaround/experiment confirmation messages, throttled to first 3-5 hits. Telemetry that an opt-in workaround actually fired.
+- **`[vi-follow-draw mode=N]`** — workaround/experiment confirmation message, throttled to first 3-5 hits. Telemetry that an opt-in workaround actually fired.
 - **`[RT64] setCurrentThreadName threw`** — exception that the gated success path was supposed to avoid; you want to see this.

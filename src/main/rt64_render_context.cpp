@@ -36,6 +36,9 @@ extern "C" int rs64_vi_driven(void);
 
 // (g_attribution_active decl removed 2026-06-02 — was unused here; g_current_scene is the screen-state global.)
 extern "C" volatile unsigned g_last_swap_fb;  // game's last-swapped front buffer (for present)
+extern "C" volatile unsigned g_most_drawn_fb; // F5 GBI's most-draw-active color image (the buffer the
+                                              // game actually renders content into; menu = 0x790000/512)
+extern "C" volatile unsigned g_most_drawn_fb_width; // and its color-image width (menu = 512)
 
 // Shared Application accessor for the LLE DPC bridge (src/rsp/dpc_bridge.cpp).
 // The bridge needs to forward Factor 5 raw RDP byte ranges via
@@ -847,6 +850,61 @@ public:
                 ultramodern::renderer::ViRegs* vi = ultramodern::renderer::get_vi_regs();
                 if (vi) { uint32_t off = vi->VI_ORIGIN_REG & 0xFFFu; vi->VI_ORIGIN_REG = (s_force_vi & ~0xFFFu) | off; }
             }
+            // ROGUESQ_FORCE_VI_WIDTH=<n>: pin VI_WIDTH_REG (diagnostic for the black menu — the menu
+            // renders to a 512-wide FB but VI scans 640/1024 -> RT64 can't match origin+width -> black).
+            static const uint32_t s_force_viw = [](){ const char* v = std::getenv("ROGUESQ_FORCE_VI_WIDTH"); return v && v[0] ? (uint32_t)strtoul(v, nullptr, 0) : 0u; }();
+            if (s_force_viw) {
+                ultramodern::renderer::ViRegs* vi = ultramodern::renderer::get_vi_regs();
+                if (vi) vi->VI_WIDTH_REG = s_force_viw;
+            }
+            // Menu present fix (2026-09-13): the game draws each frame into a color image and
+            // osViSwapBuffer's to it (g_last_swap_fb), but for the MENU that FB is 512-wide while
+            // VI_WIDTH_REG stays on the stale cinematic mode (640/1024) -> RT64 can't match
+            // origin+width -> black. Confirmed: forcing origin=swap-fb + width=512 renders the full
+            // menu. Fix: when the swapped fb is a tracked framebuffer whose width DIFFERS from
+            // VI_WIDTH_REG, present it with its real origin + width. Scoped to the mismatch, so
+            // cinematic/demo (VI already matches their 640-wide draw) are untouched. The width is
+            // cached and only re-scanned when the swap target changes, so RT64's live fb registry
+            // isn't iterated every frame. Default on; ROGUESQ_NO_MENU_PRESENT_FIX=1 disables.
+            static const bool s_menufix = [](){ const char* v = std::getenv("ROGUESQ_NO_MENU_PRESENT_FIX"); return !(v && v[0] == '1'); }();
+            if (s_menufix && s_force_vi == 0 && s_force_viw == 0 && g_most_drawn_fb) {
+                ultramodern::renderer::ViRegs* vi = ultramodern::renderer::get_vi_regs();
+                if (vi) {
+                    // Present the buffer the GBI actually drew content into (g_most_drawn_fb) with the
+                    // width the GBI published for it (g_most_drawn_fb_width) — NOT the arbiter's swap
+                    // target: for the menu the game swaps through empty 320-wide buffers while the 144
+                    // tiles land in the 512-wide 0x790000. The width is published by the GBI on the gfx
+                    // thread, so the present thread never iterates RT64's live fb map (an earlier
+                    // version did and hung on the attribution screen). Scoped to the width MISMATCH so
+                    // cinematic/demo (VI already matches their 640-wide draw) are untouched.
+                    const uint32_t base = (g_most_drawn_fb & 0x03FFFFFFu) & ~0xFFFu;
+                    const uint32_t w = g_most_drawn_fb_width;
+                    if (w >= 16 && w <= 1024 && w != vi->VI_WIDTH_REG) {
+                        static int s_lg = 0;
+                        if (std::getenv("ROGUESQ_LOG_MENU_FIX") && s_lg < 200) { ++s_lg;
+                            // Also dump the vertical/scale VI state: RT64's fbSize() derives the presented
+                            // HEIGHT from V_START/V_END + Y_SCALE (rt64_vi.cpp), which this fix does NOT
+                            // touch. If those are stale (cinematic mode) the menu presents only the top.
+                            fprintf(stderr, "[menu-fix FIRED] drawn=0x%08X w=%u (was VIw=%u VIorg=0x%08X) "
+                                    "xscale=0x%X yscale=0x%X hstart=0x%X vstart=0x%X vsync=0x%X status=0x%X\n",
+                                    (unsigned)g_most_drawn_fb, w, vi->VI_WIDTH_REG, vi->VI_ORIGIN_REG,
+                                    vi->VI_X_SCALE_REG, vi->VI_Y_SCALE_REG, vi->VI_H_START_REG,
+                                    vi->VI_V_START_REG, vi->VI_V_SYNC_REG, vi->VI_STATUS_REG);
+                            fflush(stderr); }
+                        vi->VI_ORIGIN_REG = base | (vi->VI_ORIGIN_REG & 0xFFFu);
+                        vi->VI_WIDTH_REG  = w;
+                        // The menu is a 512x448 full-frame INTERLACED buffer, but RT64's VI::fbSize()
+                        // computes the source height as (vEnd-vStart)/(2*yScaleFloat) = 442/2 ~= 224
+                        // (one field), so it presents only the TOP HALF. Halving the vertical scale
+                        // (yScaleFloat = 1024/VI_Y_SCALE; 0x400->0x800 => 1.0->0.5) doubles fbSize().y to
+                        // ~448 so the whole menu is read+scaled to the window. Scoped to the same width-
+                        // mismatch as the origin/width override, so cinematic/demo are untouched.
+                        // ROGUESQ_NO_MENU_VSCALE_FIX=1 disables just this vertical part.
+                        static const bool s_vfix = [](){ const char* v = std::getenv("ROGUESQ_NO_MENU_VSCALE_FIX"); return !(v && v[0] == '1'); }();
+                        if (s_vfix && vi->VI_Y_SCALE_REG == 0x400) vi->VI_Y_SCALE_REG = 0x800;
+                    }
+                }
+            }
             // Always log first 4 + every 64th update_screen so we can tell
             // whether VI events are firing at all. The visual-output question
             // depends entirely on this being called regularly.
@@ -957,6 +1015,25 @@ public:
                         }
                     }
                 }
+            }
+
+            // ROGUESQ_SKIP_DEMO=<n>: pin gGameSettings.demoId (0x80130B54) = n every present so the
+            // attract mode plays that recorded demo directly (skipping earlier demos + transitions).
+            // demoId->level: 0=MosEisley/Tatooine, 1=JadeMoon, 2=KileII, 3=Taloraan, 4=Fest, 5=TrenchRun
+            // (dLevelByDemoId 0x800CD404 = 00 05 07 0A 0B 11; gDemoFilenames 0x80109AE4). unk15
+            // (0x130B55) pinned 0 so cycleIdleDemoId can't drift the selector, so it LOOPS this demo.
+            // ROGUESQ_SKIP_TO_JADEMOON=1 is the convenience alias for n=1. Combine with
+            // ROGUESQ_CINE_FASTFWD to blast the intro cinematic. Selector RE:
+            // plans/jade-moon-demo-freeze-plan.md, docs/debug-trace-env-vars.md.
+            static const int s_skip_demo = [](){
+                const char* v = std::getenv("ROGUESQ_SKIP_DEMO");
+                if (v && v[0]) return std::atoi(v);
+                const char* j = std::getenv("ROGUESQ_SKIP_TO_JADEMOON");
+                return (j && j[0] && j[0] != '0') ? 1 : -1;
+            }();
+            if (s_skip_demo >= 0 && s_skip_demo <= 5 && app->core.RDRAM) {
+                app->core.RDRAM[0x130B54 ^ 3] = (uint8_t)s_skip_demo;
+                app->core.RDRAM[0x130B55 ^ 3] = 0;
             }
             // Game-state poller: read engine globals via RDRAM and log changes.
             // Tells us whether the game is actually progressing past boot, even

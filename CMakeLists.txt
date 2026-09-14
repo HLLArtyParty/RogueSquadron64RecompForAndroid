@@ -145,8 +145,15 @@ if (EXISTS "${MIPS_GCC}" AND EXISTS "${N64RECOMP_EXE}" AND PATCHES_MAKE_EXE)
         VERBATIM
     )
 
-    # Step 3: build PatchesLib that wraps the recompiled output
-    add_library(PatchesLib STATIC "${RECOMPILED_PATCHES_DIR}/patches.c")
+    # Step 3: build PatchesLib that wraps the recompiled output.
+    # OBJECT (not STATIC): CMake splices its .obj directly onto the exe link
+    # line, so the patch symbols are strong command-line-object definitions.
+    # A .lib-vs-.lib pair is the documented failure mode -- /FORCE:MULTIPLE does
+    # NOT reliably let a static-lib override win an address-of reference (the
+    # func_map's &getNpcCurrentHealth bound to the RecompiledFuncs body instead,
+    # so the indirect LOOKUP_FUNC call reached the unguarded recompiled version
+    # and AV'd). An object beats an archive member regardless of link order.
+    add_library(PatchesLib OBJECT "${RECOMPILED_PATCHES_DIR}/patches.c")
     set_source_files_properties("${RECOMPILED_PATCHES_DIR}/patches.c"
         PROPERTIES GENERATED TRUE)
 
@@ -319,8 +326,9 @@ else()
     target_link_libraries(RogueSquadron64Recomp PRIVATE SDL2::SDL2 ${CMAKE_DL_LIBS} Threads::Threads)
 endif()
 
-# PatchesLib must come BEFORE RecompiledFuncs so the linker takes its
-# overrides for any duplicated symbol names (Zelda's pattern).
+# PatchesLib is an OBJECT library: its objects go straight onto the exe link
+# line ahead of RecompiledFuncs (the .lib), so the patch definitions win any
+# duplicated symbol via /FORCE:MULTIPLE (object beats archive member).
 if (PATCHES_BUILD_OK)
     target_link_libraries(RogueSquadron64Recomp PRIVATE PatchesLib)
 endif()

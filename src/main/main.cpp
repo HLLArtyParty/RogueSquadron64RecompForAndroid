@@ -1644,18 +1644,119 @@ static void set_env(const char* name, const char* value) {
 #endif
 }
 
-int main(int argc, char* argv[]) {
-    // Args are translated into the ROGUESQ_* env vars the rest of main reads.
-    //   --mute / -m         silence output (master gain 0)
-    //   NAME=VALUE          set that env var directly
+// User-facing runtime flags. Each maps a --flag to a ROGUESQ_* env var that the
+// getenv-based knobs elsewhere read. The full debug/trace catalog stays env-only
+// (docs/debug-trace-env-vars.md); reach any of those with --set NAME=VALUE.
+struct CliFlag {
+    const char* flag;   // long name without leading "--"
+    const char* env;    // target ROGUESQ_* variable
+    enum Kind { Bool, Value } kind;
+    const char* on;     // Bool: value for --flag; Value: unused
+    const char* off;    // Bool: value for --no-flag; Value: unused
+    const char* help;
+};
+static const CliFlag kCliFlags[] = {
+    {"gfx-api",          "ROGUESQ_GFX_API",          CliFlag::Value, "",  "",  "graphics API: vulkan | d3d12 (default auto)"},
+    {"hle-dev-mode",     "ROGUESQ_HLE_DEV_MODE",     CliFlag::Bool,  "1", "0", "RT64 ImGui inspector on F1 (default on in Debug)"},
+    {"vi-driven-loop",   "ROGUESQ_VI_DRIVEN_LOOP",   CliFlag::Bool,  "1", "0", "hardware VI/SP/DP frame protocol (default on); --no- restores host-paced loop"},
+    {"f5-native",        "ROGUESQ_F5_NATIVE",        CliFlag::Bool,  "1", "0", "emit F5 geometry (default on); --no- parses without emitting"},
+    {"audio-ucode",      "ROGUESQ_NO_AUDIO_UCODE",   CliFlag::Bool,  "0", "1", "MusyX synth (default); --no-audio-ucode uses the silent stub"},
+    {"audio-gain",       "ROGUESQ_AUDIO_GAIN",       CliFlag::Value, "",  "",  "master gain multiplier (e.g. 0.35; 0 = silent)"},
+    {"audio-latency-ms", "ROGUESQ_AUDIO_LATENCY_MS", CliFlag::Value, "",  "",  "audio buffer latency in milliseconds"},
+    {"dump-pcm",         "ROGUESQ_DUMP_PCM",         CliFlag::Value, "",  "",  "write synth output to a 22050 Hz stereo WAV at <path>"},
+    {"render-song",      "ROGUESQ_RENDER_SONG",      CliFlag::Value, "",  "",  "force a specific song key (0 = N64-logo music)"},
+    {"fake-controller",  "ROGUESQ_FAKE_CONTROLLER",  CliFlag::Bool,  "1", "0", "fake a connected controller (headless runs)"},
+    {"auto-start",       "ROGUESQ_AUTO_START",       CliFlag::Value, "",  "",  "pulse START after <ms> (headless runs)"},
+};
+
+static void print_cli_usage() {
+    fprintf(stderr, "Usage: RogueSquadron64Recomp [options]\n\nOptions:\n");
+    fprintf(stderr, "  -m, --mute                 silence output (master gain 0)\n");
+    for (const CliFlag& f : kCliFlags) {
+        char name[64];
+        if (f.kind == CliFlag::Bool)
+            snprintf(name, sizeof(name), "--[no-]%s", f.flag);
+        else
+            snprintf(name, sizeof(name), "--%s <value>", f.flag);
+        fprintf(stderr, "  %-26s %s\n", name, f.help);
+    }
+    fprintf(stderr, "  --set NAME=VALUE           set any ROGUESQ_* variable directly\n");
+    fprintf(stderr, "  -h, --help                 show this help and exit\n");
+    fprintf(stderr,
+        "\nEvery option maps to a ROGUESQ_* environment variable; NAME=VALUE (bare) works too.\n"
+        "Full debug/trace variable list: docs/debug-trace-env-vars.md\n");
+}
+
+// Translate argv into the ROGUESQ_* env vars the rest of main reads. Returns an
+// exit code to stop startup (0 for --help, 2 for a bad option), or -1 to continue.
+static int apply_cli_args(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         const char* a = argv[i];
+        if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
+            print_cli_usage();
+            return 0;
+        }
         if (!strcmp(a, "--mute") || !strcmp(a, "-m")) {
             set_env("ROGUESQ_AUDIO_GAIN", "0");
-        } else if (const char* eq = strchr(a, '=')) {
+            continue;
+        }
+        if (!strcmp(a, "--set")) {
+            const char* kv = (i + 1 < argc) ? argv[++i] : nullptr;
+            const char* eq = kv ? strchr(kv, '=') : nullptr;
+            if (!eq) {
+                fprintf(stderr, "error: --set expects NAME=VALUE\n");
+                return 2;
+            }
+            std::string name(kv, eq - kv);
+            set_env(name.c_str(), eq + 1);
+            continue;
+        }
+        // Long flag: --flag, --flag=value, or --no-flag.
+        if (a[0] == '-' && a[1] == '-') {
+            const char* body = a + 2;
+            const char* eq = strchr(body, '=');
+            std::string name = eq ? std::string(body, eq - body) : std::string(body);
+            bool negated = false;
+            if (name.rfind("no-", 0) == 0) { negated = true; name.erase(0, 3); }
+            const CliFlag* found = nullptr;
+            for (const CliFlag& f : kCliFlags) {
+                if (name == f.flag) { found = &f; break; }
+            }
+            if (!found) {
+                fprintf(stderr, "error: unknown option '%s' (try --help)\n", a);
+                return 2;
+            }
+            if (found->kind == CliFlag::Bool) {
+                set_env(found->env, negated ? found->off : found->on);
+            } else {
+                if (negated) {
+                    fprintf(stderr, "error: '--no-%s' is not a toggle\n", found->flag);
+                    return 2;
+                }
+                const char* val = eq ? eq + 1 : ((i + 1 < argc) ? argv[++i] : nullptr);
+                if (!val) {
+                    fprintf(stderr, "error: --%s expects a value\n", found->flag);
+                    return 2;
+                }
+                set_env(found->env, val);
+            }
+            continue;
+        }
+        // Bare NAME=VALUE passthrough (scripts / any env var).
+        if (const char* eq = strchr(a, '=')) {
             std::string name(a, eq - a);
             set_env(name.c_str(), eq + 1);
+            continue;
         }
+        fprintf(stderr, "error: unexpected argument '%s' (try --help)\n", a);
+        return 2;
+    }
+    return -1;
+}
+
+int main(int argc, char* argv[]) {
+    if (int rc = apply_cli_args(argc, argv); rc >= 0) {
+        return rc;
     }
 
 #ifdef _WIN32

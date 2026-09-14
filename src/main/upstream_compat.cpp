@@ -861,6 +861,9 @@ extern "C" void rs64_cine_iter_tick(unsigned iter) {
 // same mutex chain that's hanging the game thread (events_context.message_mutex
 // in ultramodern, in particular), so polling from gfx_thread isn't reliable.
 // A standalone thread that only uses Sleep + atomics is immune.
+#ifdef _WIN32
+static void rs64_dump_all_thread_stacks(DWORD game_tid);
+#endif
 extern "C" void rs64_cine_start_watchdog_thread(void) {
     static std::atomic<bool> s_started{false};
     bool was = s_started.exchange(true, std::memory_order_relaxed);
@@ -903,8 +906,52 @@ extern "C" void rs64_cine_start_watchdog_thread(void) {
                     }
                 }
             }
+#ifdef _WIN32
+            // ROGUESQ_DUMP_STACKS_ON_DEMO_STALL=<ms>: the demo-input cursor demoStep (0x80109AE0) is
+            // advanced by the GAME THREAD every demo frame; it stalls exactly when the game thread
+            // deadlocks (e.g. the jade-moon structure-explosion freeze). When it's unchanged that long,
+            // suspend + StackWalk64 + symbolize EVERY thread (game thread first) so we can read the
+            // game thread's actual blocked osRecvMesg/queue. See plans/jade-moon-demo-freeze-plan.md.
+            {
+                static const char* dse = std::getenv("ROGUESQ_DUMP_STACKS_ON_DEMO_STALL");
+                static const uint64_t dsms = (dse && *dse) ? (uint64_t)std::atoll(dse) : 0;
+                static uint32_t last_demo = 0xFFFFFFFFu; static uint64_t last_demo_change = 0; static bool demo_dumped = false;
+                if (dsms && !demo_dumped) {
+                    const uint8_t* rd = (const uint8_t*)g_recomp_rdram_for_wp_raw;
+                    if (rd) {
+                        uint32_t ds = *reinterpret_cast<const uint32_t*>(rd + 0x109AE0);
+                        uint64_t now = GetTickCount64();
+                        if (ds != last_demo) { last_demo = ds; last_demo_change = now; }
+                        else if (last_demo != 0 && last_demo != 0xFFFFFFFFu && last_demo_change && now - last_demo_change >= dsms) {
+                            demo_dumped = true;
+                            fprintf(stderr, "[demo-stall] demoStep stuck at %u for %llu ms — dumping all thread stacks\n",
+                                    ds, (unsigned long long)(now - last_demo_change));
+                            fflush(stderr);
+                            rs64_dump_all_thread_stacks(g_cine_tid.load(std::memory_order_relaxed));
+                        }
+                    }
+                }
+            }
+#endif
         }
     }).detach();
+}
+
+// One-shot RDRAM dump (big-endian / PJ64 layout) triggered from anywhere with an
+// rdram pointer. Diagnostic: walk with tools/validate/f5_dl_walk.py. Fires once.
+extern "C" void rs64_dump_rdram_once(uint8_t* rd, const char* path) {
+    static int done = 0; if (done || !rd) return; done = 1;
+    FILE* f = fopen(path, "wb");
+    if (f) {
+        static uint8_t buf[0x10000];
+        for (uint32_t base = 0; base < 0x800000u; base += (uint32_t)sizeof(buf)) {
+            for (uint32_t i = 0; i < sizeof(buf); ++i) buf[i] = rd[(base + i) ^ 3];
+            fwrite(buf, 1, sizeof(buf), f);
+        }
+        fclose(f);
+    }
+    fprintf(stderr, "[rdram-dump-once] -> %s (%s)\n", path, f ? "ok" : "OPEN FAILED");
+    fflush(stderr);
 }
 
 // Periodic progress log so we can see whether the inner loop is iterating

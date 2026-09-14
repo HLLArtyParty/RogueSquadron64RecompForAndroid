@@ -30,6 +30,11 @@ events.onexec(0x800AA658, function () {                 // tickCutsceneActionSlo
     if (frame == 900) dump("cine_frame900");
 });
 events.onexec(0x80000B20, function () { console.log("[rs64_dump] loadOverlay a0=" + cpu.gpr.a0); });
+// Sky/horizon handler DRAW branch (cinematicSplineWalkerNpcHandler a1==4, 0x8005C378). Mirrors the
+// recomp probe: dump a golden at draw #200 (Tatooine demo, ~77s) so we can compare hardware's sky
+// modelview (0x80700040) against ours. See plans/skybox-not-rendering-plan.md.
+var sky = 0;
+events.onexec(0x8005C378, function () { sky++; if (sky == 60) dump("sky_frame60"); if (sky == 200) dump("sky_frame200"); });
 console.log("[rs64_dump] hooks installed");
 
 // per-frame dt inputs of cinematicComputeDt (0x800AF360): after timeSnapshotFiller returns (pc 0x800AF374),

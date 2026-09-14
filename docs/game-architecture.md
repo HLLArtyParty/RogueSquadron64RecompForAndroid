@@ -656,7 +656,7 @@ After renaming a symbol (`llvm-objcopy --redefine-sym`):
 ## What's NOT yet renamed / understood
 
 - ~2000 functions still as `func_XXXXXXXX` (an active renaming pass is in progress — see `tools/rename/`).
-- Big unmapped areas: the **mission overlay** (~900 funcs, per-craft/per-level), remaining **cinematic** helpers, the **MORT voice codec**, **HMP terrain** inner helpers, the **DMA mutex** functions, and the **music→synth voice-table gather** (the channel→voice-table copy).
+- Big unmapped areas: the **mission overlay** (~900 funcs, per-craft/per-level), remaining **cinematic** helpers, **HMP terrain** inner helpers, the **DMA mutex** functions, and the **music→synth voice-table gather** (the channel→voice-table copy). (The **MORT voice codec** is recompiled and works — see the streamed-voice pipeline; the demo freeze once attributed to it was an N64Recomp link-branch codegen bug, fixed 2026-09-13.)
 
 ## How to extend this document
 

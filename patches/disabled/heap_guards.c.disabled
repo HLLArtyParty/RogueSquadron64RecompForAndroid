@@ -4,7 +4,7 @@
 // auto-generated funcs_*.c can be regenerated cleanly.
 //
 // The function pops a block off a doubly-linked free list (allocating a
-// new chunk via func_8002221C if the list is empty), then inserts the
+// new chunk via findAndUnlinkSmallestEntry if the list is empty), then inserts the
 // popped block into a per-frame "active" queue and bumps the queue's
 // allocation pointer. Returns block + 8 (skipping the 8-byte header).
 
@@ -24,7 +24,7 @@ typedef struct Block {
 } Block;
 
 // Game-side allocator helper (resolved via syms.ld → 0x8002221C).
-extern Block* func_8002221C(void);
+extern Block* findAndUnlinkSmallestEntry(void);
 
 // Game-side globals (declared in syms.ld at their RAM addresses):
 extern Block*  heap_free_head;       // 0x801163B0 — head of free list
@@ -42,7 +42,7 @@ RECOMP_PATCH Block* func_80007D74(void) {
     // If the free list is empty, allocate a new chunk (which itself is a
     // chain of free blocks linked via .next) and prepend it to the list.
     if (head == NULL) {
-        Block* fresh = func_8002221C();
+        Block* fresh = findAndUnlinkSmallestEntry();
         if (fresh != NULL) {
             // Walk fresh's chain to find its tail
             Block* tail = fresh;

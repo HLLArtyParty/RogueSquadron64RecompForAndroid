@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for AI agents working on the Rogue Squadron 64 Recompiled project — a native port of *Star Wars: Rogue Squadron* (N64, USA v1.0) built with N64Recomp + RT64. The game boots, and content renders: attribution text, the textured Factor 5 / N64-logo cinematic, the main menu, and the attract demo all come up. The current frontier is display-list fidelity (texturing/UV bugs and per-frame DL desyncs), the MORT voice codec, and symbol renaming. See the [Status](README.md#status) table in the README for the authoritative what-works snapshot before starting anything — this file assumes it.
+Guidance for AI agents working on the Rogue Squadron 64 Recompiled project — a native port of *Star Wars: Rogue Squadron* (N64, USA v1.0) built with N64Recomp + RT64. The game boots, and content renders: attribution text, the textured Factor 5 / N64-logo cinematic, the main menu, and the attract demo all come up. The current frontier is display-list fidelity (texturing/UV bugs and per-frame DL desyncs), attract-demo stability, and symbol renaming. See the [Status](README.md#status) table in the README for the authoritative what-works snapshot before starting anything — this file assumes it.
 
 ## Project layout
 
@@ -47,14 +47,16 @@ Ignore the `lld-link : warning : found both wmain and main; using latter` — be
 
 ROM lives at `build/Debug/rogue_squadron.z64` (USA v1.0, xxHash3-64 = `0x6B66A44153594DEA`).
 
-For a headless run that drives past the title without a controller, use `ROGUESQ_FAKE_CONTROLLER=1` and `ROGUESQ_AUTO_START=<ms>`.
+For a headless run that drives past the title without a controller, pass `--fake-controller --auto-start <ms>` (or the env vars `ROGUESQ_FAKE_CONTROLLER=1` / `ROGUESQ_AUTO_START=<ms>`).
 
 ## Environment variables
 
 All trace categories are off by default. The full catalog is in
 [docs/debug-trace-env-vars.md](docs/debug-trace-env-vars.md) — **read it before
-adding a new `fprintf` or asking the user to enable logs.** The switches you are
-most likely to need:
+adding a new `fprintf` or asking the user to enable logs.** The common
+user-facing switches below also have `--flags` (run the exe with `--help`); the
+env-var name is kept here since that is what the code reads and what you grep
+for. Any variable can be set on the command line with `--set NAME=VALUE`.
 
 | Env var | Effect |
 |---|---|
@@ -62,11 +64,10 @@ most likely to need:
 | `ROGUESQ_HLE_DEV_MODE=0\|1` | RT64 ImGui inspector on F1 (default on in Debug, off in Release) |
 | `ROGUESQ_VI_DRIVEN_LOOP=0` | Old host-paced frame loop instead of the hardware VI protocol (default on). The VI-driven loop matches hardware message order and is the current stability baseline |
 | `ROGUESQ_F5_NATIVE=0` | Parse F5 display lists without emitting geometry |
-| `ROGUESQ_F5_CHUNK_BOUND=0` / `ROGUESQ_F5_B5_CHUNKEND=0` / `ROGUESQ_F5_DL_SKIP16=0` | Disable individual DL grammar rules (all default on) |
+| `ROGUESQ_F5_CHUNK_BOUND=0` | Disable the F5 DL chunk-bounded fetch rule (default on) |
 | `ROGUESQ_LLE_FORCE=1` | Run graphics through the recompiled RSP ucode instead of HLE (diagnostic only — see dead ends) |
 | `ROGUESQ_FB_GUARDS=0` | Disable the host framebuffer-window guards for A/B against goldens |
-| `ROGUESQ_BUFSTUCK_RESCUE=0` | Disable the video-buffer arbiter rescue hook |
-| `ROGUESQ_VOICE_UNSTICK` | Host watchdog (in `rt64_render_context.cpp`) that clears the streamed-voice active byte a stuck cutscene waits on — the MORT codec never fires the completion itself. See the demo-freeze note under Architectural quirks |
+| `ROGUESQ_VOICE_UNSTICK` | Legacy host watchdog (in `rt64_render_context.cpp`, default OFF) that clears the streamed-voice active byte a stuck cutscene waits on. Obsolete now that the demo-freeze root cause is fixed (see the Audio note under Architectural quirks); kept as a diagnostic only |
 | `ROGUESQ_NO_AUDIO_UCODE=1` | Silent audio stub instead of the MusyX synth |
 | `ROGUESQ_DUMP_PCM=<path>` | Write the synth output to a 22050 Hz stereo WAV |
 | `ROGUESQ_RENDER_SONG=<key>` | Force a specific song (0 = the N64-logo music) |
@@ -129,18 +130,27 @@ The primary correctness workflow — diff a live run against a Project64 golden 
 ### Pipeline at a glance
 
 ```
-patches/heap_guards.c           ← MIPS-side C (game pointers, externs)
+patches/npc_health_guard.c      ← MIPS-side C (game pointers, externs)
   ↓ mips64-elf-gcc -mips2 -mabi=32 -nostdinc
-patches/heap_guards.o
+patches/npc_health_guard.o
   ↓ mips64-elf-ld -T patches.ld -T syms.ld
 patches/patches.elf
   ↓ N64Recomp.exe ../patches.toml  (single_file_output, strict_patch_mode)
 RecompiledPatches/patches.c     ← host C with recomp_func_t signatures
-  ↓ clang-cl
-PatchesLib.lib
-  ↓ linked FIRST in target_link_libraries (before RecompiledFuncs)
-RogueSquadron64Recomp.exe       ← /FORCE:MULTIPLE picks our overrides at link
+  ↓ clang-cl  (PatchesLib = OBJECT library, NOT static)
+PatchesLib objects              ← spliced directly onto the exe link line
+  ↓ ahead of RecompiledFuncs (the .lib)
+RogueSquadron64Recomp.exe       ← /FORCE:MULTIPLE: object beats archive member
 ```
+
+**PatchesLib MUST be an OBJECT library, not STATIC.** With patches wrapped in a
+static `.lib`, `/FORCE:MULTIPLE` does not reliably let the override win an
+*address-of* reference — the `func_map`'s `&getNpcCurrentHealth` (used by every
+`LOOKUP_FUNC`/indirect call) bound to the RecompiledFuncs body, so the patch
+silently never ran (see [plans/jade-moon-demo-freeze-plan.md](plans/jade-moon-demo-freeze-plan.md)).
+An object's symbols are always on the link line and beat archive members
+regardless of order — the documented Zelda pattern (patches = .obj,
+RecompiledFuncs = .lib).
 
 ### Adding a new override
 
@@ -179,7 +189,7 @@ RogueSquadron64Recomp.exe       ← /FORCE:MULTIPLE picks our overrides at link
 | MIPS LD | `E:/mips-toolchain/bin/mips64-elf-ld.exe` |
 | `make` | `mingw32-make` (any MinGW install) |
 | N64Recomp (patches) | `build/Debug/N64Recomp.exe` — built from the submodule via `N64RecompCLI`; supports `--dump-context` + `func_reference_syms_file`. Use ONLY for the patches pipeline |
-| N64Recomp (main regen) | `E:/Projects/N64Recomp/Debug/N64Recomp.exe` — the older binary; use for full main-tree regeneration (the newer one truncates output — see dead ends) |
+| N64Recomp (main regen) | `E:/Projects/N64Recomp/Debug/N64Recomp.exe` — use for full main-tree regeneration. Rebuild it from current source if it truncates (`cmake --build build_new --config Debug --target N64RecompCLI` in the N64Recomp repo, then copy `build_new/Debug/N64Recomp.exe` here) — a stale binary reads past the entrypoint into a `cache` instr; see dead ends |
 
 See [patches/README.md](patches/README.md) for the full how-to.
 
@@ -204,11 +214,13 @@ This game uses a Factor 5-customized F3DEX-derived ucode. The RT64 profile `GBI_
 
 Chunks are contiguous 0x108-byte blocks; the interpreter walks chunk content linearly and the `0xB5` terminator at offset 0x100 returns control to the parent DL. Models render as CI4 textures at palette bank 15. **The current model texturing/UV bug is RT64-side** — the DL stream, UVs, wrap/mask, and texture data have been proven byte-identical to a PJ64 golden, so the defect is in RT64's rendering of that faithful stream, not in what we submit. Use `f5_dl_walk.py --tex` to compare.
 
-### Audio — MusyX synth (working) vs MORT voice (not)
+### Audio — MusyX synth and MORT voice
 
 Rogue Squadron drives audio through Factor 5's **MusyX** engine, and **SFX and music work**: the CPU-side MusyX sequencer submits `M_AUDTASK`s, and a host-side synth path produces PCM that flows through `queue_samples` → SDL ([main.cpp](src/main/main.cpp)). The RSP synth microcode itself is stubbed (`aspMain` on MusyX task data hangs — no shared format with stock ucode), so the M_AUDTASK RSP call returns `RspExitReason::Broke` and the synthesis happens host-side instead. `ROGUESQ_NO_AUDIO_UCODE=1` reverts to a silent stub; `ROGUESQ_DUMP_PCM` / `ROGUESQ_RENDER_SONG` drive offline capture.
 
-Subtitled **dialogue uses a separate codec, MORT** (per the [rerogue](https://github.com/dpethes/rerogue) PC-version RE), which is **not implemented**. This is the direct cause of the demo / FrontEnd cutscene freeze: the cutscene thread waits on a streamed-voice active byte that the MORT decode would clear, and it never does. `ROGUESQ_VOICE_UNSTICK` is a host watchdog in [rt64_render_context.cpp](src/main/rt64_render_context.cpp) that clears that byte so the cutscene advances. `tools/extract_speech_table.py` extracts the voiceId→text table; in-engine MORT decode is the missing piece (`tools/MORTDecoder.cpp` / `tools/mort_decode.py` are the RE scratch).
+Subtitled **dialogue uses a separate codec, MORT** (per the [rerogue](https://github.com/dpethes/rerogue) PC-version RE). Contrary to earlier notes, MORT is **fully recompiled and works** — `tools/mort_decode.py` / `tools/MORTDecoder.cpp` are the offline reference. The demo / FrontEnd cutscene freeze that was long blamed on a missing MORT codec was actually an **N64Recomp codegen bug**: `bgezal`/`bltzal` did not emit the unconditional `$ra = PC+8` link, so the audio decoder's `bltzal $zero` PC-load idiom got a garbage coefficient-table pointer and `applyVoiceDelayFilter` faulted/spun, starving the cooperative scheduler. Fixed in the recompiler (`recompilation.cpp` emits `emit_link_register` unconditionally) plus a full regen. See project memory `demo-voiceline-freeze-2026-09-13`. `ROGUESQ_VOICE_UNSTICK` (the old host watchdog in [rt64_render_context.cpp](src/main/rt64_render_context.cpp)) is now obsolete, kept as a diagnostic. `tools/extract_speech_table.py` extracts the voiceId→text table.
+
+The **structure-destruction attract-demo freeze** (jade moon and any demo that blows up a structure) is **FIXED** ([plans/jade-moon-demo-freeze-plan.md](plans/jade-moon-demo-freeze-plan.md)): during an explosion an NPC has `npc+0x190 == NULL`, so `getNpcCurrentHealth` derefs a wild address and AVs; the SEH-swallowed AV leaves the gfx-frame barrier inconsistent → deadlock. The `patches/npc_health_guard.c` override guards the read. Note it only took effect once `PatchesLib` was made an **OBJECT** library (see the patches section) — getNpcCurrentHealth is reached only via the `func_map`/`LOOKUP_FUNC` indirect path, and a static-lib override does not win that address-of reference. When a recompiled function hangs on data that decodes fine offline, suspect a codegen mistranslation of a rare instruction (especially the `*al` link-branches) before deep subsystem RE.
 
 ### Cooperative-scheduler queue plumbing
 
@@ -240,7 +252,7 @@ The interpreter loop in [rt64_interpreter.cpp](lib/rt64/src/hle/rt64_interpreter
 4. **Check `submit_rsp_task` counts.** `n_gfx` = M_GFXTASK enqueues, `n_other` = audio. Compare with `dp_complete` on 0x8011A408 (mqdiag `Dp` column) to find tasks stuck in RT64.
 5. **Use `mqdiag_NNN.txt`** to validate queue-level theories before instrumenting.
 
-For a hang specifically: if it's a cutscene/demo, first suspect the MORT voice freeze (see Audio quirk) before anything else — that's the known one.
+For a hang specifically: if it's a cutscene/demo, suspect a recompiler codegen mistranslation of a rare instruction on the hung path (the demo-freeze root cause — see the Audio quirk) before deep subsystem RE. The remaining intermittent attract-demo freeze on structure destruction is tracked in [plans/jade-moon-demo-freeze-plan.md](plans/jade-moon-demo-freeze-plan.md).
 
 ## Avoid these dead ends (already disproven)
 
@@ -265,12 +277,12 @@ For a hang specifically: if it's a cutscene/demo, first suspect the MORT voice f
 ### Boot flow / state machine
 
 - **Force-menu bypass via `ROGUESQ_FORCE_MENU_AT_SEC`** — skipping cinematic init crashes downstream. Don't jump the state machine.
-- **Re-investigating a "missing state-1 writer" in the 5-slot table at `D_80154620`** — that's the speech/streamed-voice playback slots, not cinematic stages. Related to the MORT freeze (the active byte lives here); the fix is the codec/watchdog, not a scheduler writer.
+- **Re-investigating a "missing state-1 writer" in the 5-slot table at `D_80154620`** — that's the speech/streamed-voice playback slots, not cinematic stages. This is where the streamed-voice active byte lives; the demo-freeze it seemed to gate was actually the `bgezal`/`bltzal` codegen bug (now fixed), not a missing scheduler writer.
 
 ### Build / regeneration
 
 - **Hand-editing `funcs_*.c` for game-logic overrides** — next regen silently strips it. Use `patches/`. Diagnostic `fprintf` probes are fine.
-- **Regenerating `funcs_*.c` with the newer N64Recomp** (`build/Debug/N64Recomp.exe`) — it errors on the unsupported `cache 0x0D` instruction in `func_8000040C` / `func_80018D80` and **truncates `funcs.h` and the affected `funcs_N.c` mid-write**. Restore via `cd E:/Projects/N64Recomp && git checkout -- RecompiledFuncs/`. Use the *older* `E:/Projects/N64Recomp/Debug/N64Recomp.exe` for full regeneration.
+- **Regenerating `funcs_*.c` with a stale N64Recomp binary** — a binary built from old source (e.g. `build/Debug/N64Recomp.exe`, the patches binary) errors on the `cache` instruction (its entrypoint recompile reads past the 0xC bound into `func_8000040C`) and **truncates `funcs.h` to ~7 lines**. Restore via `cd E:/Projects/N64Recomp && git checkout -- RecompiledFuncs/`, then rebuild the main-regen binary from current source: `cmake --build build_new --config Debug --target N64RecompCLI` and copy `build_new/Debug/N64Recomp.exe` to `Debug/N64Recomp.exe`. A current-source build bounds the entrypoint correctly and produces the committed 2561-line `funcs.h` (verified 2026-09-13).
 - **Never write repo files via Python `open(...,'w')`** — a bad Python write once truncated the entire GBI core and it had to be rebuilt from goldens. Use the editor tools.
 
 ### Miscellaneous
@@ -297,7 +309,7 @@ Priorities, per the README's [Open work](README.md#open-work):
 
 1. **Display-list desyncs** — about a dozen per run, typically garbage right after a material sub-DL returns. Root-cause with [docs/f5-model-dl-spec.md](docs/f5-model-dl-spec.md) and `tools/validate/f5_dl_walk.py`.
 2. **Model texturing beyond the cinematic** — the RT64-side texture/UV bug (see the F5 GBI quirk). Byte-faithful stream confirmed; the defect is in RT64.
-3. **MORT voice codec** — the demo/cutscene freeze fix. `tools/extract_speech_table.py` extracts the table; in-engine decode is unwritten.
+3. **Attract-demo stability** — the structure-destruction freeze (jade moon et al.) is now FIXED via `patches/npc_health_guard.c` + the OBJECT-library link fix ([plans/jade-moon-demo-freeze-plan.md](plans/jade-moon-demo-freeze-plan.md)). The Tatooine-demo freeze was fixed earlier (an N64Recomp link-branch codegen bug; MORT itself is recompiled and works). Watch for any further demo-specific stalls (Kile II / Taloraan / Fest / Trench Run untested end-to-end).
 4. **Retire the defensive KSEG0 pointer guards** — proven inert against hardware-golden runs; slated for removal via the TOML plus a regen. See [docs/plan-kseg-guard-migration.md](docs/plan-kseg-guard-migration.md).
 5. **Function renaming** of `func_8XXXXXXX` symbols — pick a memory-map region or subsystem, pattern-match against the `rogue_squadron64` decomp's m2c output and string refs, propose meaningful names. Run `tools/rename/lint_toml_syms.py` after every batch. See [tools/rename/README.md](tools/rename/README.md) and [docs/game-architecture.md](docs/game-architecture.md).
 6. **Keyboard input** — port Zelda64Recompiled's bind/rebind UI.
