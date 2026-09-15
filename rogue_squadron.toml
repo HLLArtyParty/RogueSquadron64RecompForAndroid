@@ -750,6 +750,13 @@ func = "waitForMusyXAudioTaskDone"
 before_vram = 0x80091ED0
 text = '''{ osYieldThread_recomp(rdram, ctx); }'''
 
+# (1b) Ten front-end sites spin `while (!anyAudioSlotActive())` waiting for a
+#     streamed voice slot that the DMA/retrace threads fill (hangar black screen:
+#     drainAudioAndFinalizeSpeechBuffer never yields, so no VI event is pumped).
+[[patches.hook]]
+func = "anyAudioSlotActive"
+text = '''{ osYieldThread_recomp(rdram, ctx); }'''
+
 # (2) The game frees DL chunks before waiting for SP-done, but RT64's parse may
 #     still be reading them. Wait for the in-flight parse first.
 [[patches.hook]]

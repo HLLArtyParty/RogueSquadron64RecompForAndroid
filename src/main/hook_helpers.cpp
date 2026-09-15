@@ -144,20 +144,48 @@ static void rs64_dump_all_thread_stacks(DWORD game_tid) {
     CloseHandle(snap);
 }
 
-// One-shot: cinematic loop idle for 2 s -> dump every thread's stack.
+// Cinematic loop idle for 2 s -> dump every thread's stack. Sampled up to 3
+// times at >=3 s apart so a run-to-run-variable gfx thread can be seen moving
+// (scheduler stall) vs pinned in processDisplayLists (DL parse hang).
 static void rs64_cine_dump_if_stuck(void) {
-    static std::atomic<bool> s_dumped{false};
-    if (s_dumped.load(std::memory_order_relaxed)) return;
+    static std::atomic<int> s_dumps{0};
+    static std::atomic<uint64_t> s_last_dump{0};
+    // ROGUESQ_CINE_DUMPS / ROGUESQ_CINE_DUMP_SPACING_MS: sample count (3) and spacing (3000).
+    static const int s_max = [](){ const char* e = std::getenv("ROGUESQ_CINE_DUMPS"); int v = e ? atoi(e) : 3; return v > 0 ? v : 3; }();
+    static const uint64_t s_spacing = [](){ const char* e = std::getenv("ROGUESQ_CINE_DUMP_SPACING_MS"); long v = e ? atol(e) : 3000; return (uint64_t)(v > 0 ? v : 3000); }();
+    if (s_dumps.load(std::memory_order_relaxed) >= s_max) return;
     uint64_t last = g_cine_last_ms.load(std::memory_order_relaxed);
     if (last == 0) return;
     uint64_t now = GetTickCount64();
     if (now - last < 2000) return;
+    if (now - s_last_dump.load(std::memory_order_relaxed) < s_spacing) return;
     DWORD tid = g_cine_tid.load(std::memory_order_relaxed);
     if (tid == 0) return;
-    bool expected = false;
-    if (!s_dumped.compare_exchange_strong(expected, true)) return;
-    fprintf(stderr, "[cine-watchdog] freeze detected: tid=%lu iter=%llu idle=%llums\n",
-            tid, (unsigned long long)g_cine_iter.load(), (unsigned long long)(now - last));
+    s_last_dump.store(now, std::memory_order_relaxed);
+    int n = s_dumps.fetch_add(1, std::memory_order_relaxed) + 1;
+    fprintf(stderr, "[cine-watchdog] freeze sample %d: tid=%lu iter=%llu idle=%llums\n",
+            n, tid, (unsigned long long)g_cine_iter.load(), (unsigned long long)(now - last));
+    // OSMesgQueue state for the frame/DP-pacing queues submitGfxFrame waits on. Shows
+    // whether a message is sitting undelivered (validCount>0 while a thread blocks) or
+    // was never produced (validCount==0). Struct: validCount@0x08 first@0x0C msgCount@0x10.
+    if (const uint8_t* rd = (const uint8_t*)g_recomp_rdram_for_wp_raw) {
+        auto rd32be = [rd](uint32_t a){ a &= 0x00FFFFFFu; return (uint32_t(rd[a^3])<<24)|(uint32_t(rd[(a+1)^3])<<16)|(uint32_t(rd[(a+2)^3])<<8)|uint32_t(rd[(a+3)^3]); };
+        auto rd8 = [rd](uint32_t a){ a &= 0x00FFFFFFu; return rd[a^3]; };
+        const uint32_t qs[7] = { 0x8011A818u, 0x8011A408u, 0x8011A7E8u, 0x80114388u, 0x80128CF0u, 0x80128D10u, 0x8011A420u };
+        for (uint32_t q : qs)
+            fprintf(stderr, "  [mq 0x%08X] valid=%d first=%d msgCount=%d mtq=0x%08X fullq=0x%08X\n",
+                    q, (int)rd32be(q+8), (int)rd32be(q+0xC), (int)rd32be(q+0x10), rd32be(q+0), rd32be(q+4));
+        fprintf(stderr, "  [inflight byte 0x8011A89E]=%u\n", rd8(0x8011A89Eu));
+        fprintf(stderr, "  [flags] dpwait89D=%u swapReq8C8=%u ackPend8C9=%u consumerWaiting37808=%u\n",
+                rd8(0x8011A89Du), rd8(0x8011A8C8u), rd8(0x8011A8C9u), rd8(0x80037808u));
+        // Buffer arbiter: fbptr[]@0x80128E98, state[]@0x80128EAA, count@0x80128EAD, ctr[]@0x80128EA4, bytes 0x80128EAE/AF.
+        const unsigned cnt = rd8(0x80128EADu);
+        fprintf(stderr, "  [arbiter] count=%u eae=%u eaf=%u slots:", cnt, rd8(0x80128EAEu), rd8(0x80128EAFu));
+        for (unsigned i = 0; i < cnt && i < 3; ++i)
+            fprintf(stderr, " [%u fb=0x%08X st=%u ctr=%u]", i, rd32be(0x80128E98u + i*4), rd8(0x80128EAAu + i),
+                    (unsigned)((rd8(0x80128EA4u + i*2) << 8) | rd8(0x80128EA5u + i*2)));
+        fprintf(stderr, "\n");
+    }
     fflush(stderr);
     rs64_dump_all_thread_stacks(tid);
 }

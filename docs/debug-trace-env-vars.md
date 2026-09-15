@@ -54,6 +54,8 @@ Everything below is debug/diagnostic and stays variable-only.
 | `ROGUESQ_LOG_GBI` | off | per-handler GBI command logs | Every Factor 5 GBI handler as it fires. **Very high volume.** Use when auditing which opcodes run in a phase. |
 | `ROGUESQ_LOG_GFX_TASK` | off | one line per graphics task | Low-volume task-submission trace; pair with queue diagnostics. |
 | `ROGUESQ_LOG_MESG_TRACE` | off | thread/message-order trace | Message-order trace for `tools/validate/compare_mesg_trace.py`. Scope to frames with `ROGUESQ_MESG_TRACE_FRAMES=lo-hi`. |
+| `ROGUESQ_LOG_FRAMEQ` | off | `[frameq]` | Every send/recv on the frame-protocol queues (SP/DP done, DP event, VI event, video queue, frame mutex, task queue). The last line tells which thread stopped calling the OS. |
+| `ROGUESQ_CINE_DUMPS` / `ROGUESQ_CINE_DUMP_SPACING_MS` | 3 / 3000 | `[cine-watchdog]` | Number and spacing of the watchdog's stack samples. Each sample also prints the frame queues, flag bytes and the buffer-arbiter slot table. Widen the spacing so samples land after the screen under test. |
 | `ROGUESQ_MESG_TRACE_FRAMES` | all | (companion to `ROGUESQ_LOG_MESG_TRACE`) | Frame window `lo-hi` to limit the message-order trace. |
 | `ROGUESQ_DUMP_FRAME_DL` | off | one-shot display-list dump | Dump the display list for frame `N` to disk for offline `f5_dl_walk.py` inspection. |
 | `ROGUESQ_DUMP_TEXTURES` | off | one-shot texture dump | Write loaded textures to disk once, for asset diffing. |
@@ -66,6 +68,7 @@ they're orthogonal to the log gates above but commonly co-used.
 | Env Var | Default | Effect |
 |---|---|---|
 | `ROGUESQ_VI_FOLLOW_DRAW` | `1` | VI-presentation override picker. `0` = original VI/0x66A000 lookup. `1` (default) = override only when VI's fb is stale (not in recently-written set). `2` = aggressive — always pick most-recent color fb. `3` = freshness mode — pick whichever Framebuffer in the manager has the highest `lastWriteTimestamp`, decoupled from `colorImageAddressVector` (use when modes 1/2 don't keep VI on a fresh fb because the workload's pairs aren't `interpolationCandidate` and so the vector stays empty). Workaround for the cinematic buffer-arbiter bug. |
+| `ROGUESQ_NO_MENU_PRESENT_FIX` / `ROGUESQ_MENU_FIX_STALE_MS` | off / `250` | The menu present fix scans out the GBI's most-drawn buffer at its own width when that width differs from VI's (512-wide menu vs 640/1024 VI). It only fires while that buffer received a texrect within the last N ms, so a stale 512-wide leader cannot black out a later 640-wide screen (the mission text crawl). |
 | `ROGUESQ_PRIM_FF` | off | Force PRIM_COLOR RGB to (FF,FF,FF) keeping alpha. Tests whether the warm off-white tint accounts for "less saturated reds" gap from ideal. |
 | `ROGUESQ_NO_SYNTH_FULLSYNC` | off | Disables the synthetic-fullsync injection in dpc_bridge.cpp. |
 | `ROGUESQ_VI_FORCE_FB` | off | Diagnostic. Forces VI to present a specific RDRAM fb regardless of VI_ORIGIN. Use as `ROGUESQ_VI_FORCE_FB=0x80695C00`. Bypasses the cinematic buffer-arbiter bug to test "explosion sprites land in fb X but VI never shows X" hypotheses. Strips upper-half virtual prefix automatically. |
