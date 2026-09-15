@@ -147,3 +147,13 @@ The GBI-level plan (identification + opcode map) is effectively closed — no mo
 - Null-guard on `RT64_LOG_PRINTF` — [rt64_common.h:49-50](../lib/rt64/src/common/rt64_common.h#L49-L50). Keep.
 - Enhanced `osStartThread` / `osCreateThread` logging — [ultra_translation.cpp:16-33](../lib/N64ModernRuntime/librecomp/src/ultra_translation.cpp#L16-L33). Keep (cheap, useful).
 - MSVC CRT asserts routed to stderr — [main.cpp](../src/main/main.cpp). Keep.
+
+## Geometry mode (0xB6 clear / 0xB7 set) cull bits
+
+From the tri routine (IMEM 0x1770 onward; the `f5_ucode.imem.bin` file offset is IMEM address minus 0x1080):
+the cull test masks the sign-extended screen-space cross product with `geometryMode << 18` and rejects
+when bit 31 is set, so only 0x2000 (G_CULL_BACK) culls, on positive cross (y-down screen space). 0x1000
+never reaches the test; the emitter reads it separately to skip the texcoord 1/w premultiply, so it is a
+texcoord-perspective flag, not G_CULL_FRONT. Both bits set = back-face cull. RT64 honors this when
+`ROGUESQ_F5_CULL` is on (default).
+

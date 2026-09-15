@@ -74,6 +74,7 @@ they're orthogonal to the log gates above but commonly co-used.
 | `ROGUESQ_SUPPRESS_OOB_CIMG` | off | When set, drops Factor 5 ucode emissions of bogus SET_COLOR_IMAGE commands at HIGH (≥ 0x800000) and LOW (< 0x100000) addresses before they reach RT64. Reduces the iter-810 memory spike but causes a visual regression — the 3D Factor 5 logo no longer renders, since some legitimate Factor 5 lowmem CIMGs are dropped along with the garbage. |
 | `ROGUESQ_FB_GUARDS` | on | Host framebuffer-window guards. Set `0` to disable for A/B comparison against hardware goldens. |
 | `ROGUESQ_F5_CHUNK_BOUND` | on | Factor 5 DL chunk-bounded fetch grammar rule. Set `0` to disable when diagnosing a DL desync. |
+| `ROGUESQ_F5_CULL` | on | Factor 5 cull semantics in `RSP::drawIndexedTri`: only geometry-mode bit 0x2000 culls (back faces); bit 0x1000 is the ucode's texcoord-perspective flag, not G_CULL_FRONT, so it never swaps or culls; both bits = back-face cull. `0` restores the F3DEX reading (0x1000 = CULL_FRONT, both = double-sided via `ROGUESQ_F5_CULLBOTH_DRAW`). |
 | `ROGUESQ_F5_NON` | off | Force `NoN` (No-Near-clipping) for the Factor 5 ucode: `1` disables the GPU hard near-plane clip and uses the far-plane manual clamp instead. F5 uniquely ships `NoN=false`, so `depthClipEnabled=true` discards large geometry as it approaches the camera (objects "culled / lower-detail up close"). A/B fix for that symptom; matches every other `.NoN` ucode. Applied in `RSP::setGBI` (`lib/rt64/src/hle/rt64_rsp.cpp`). |
 | `ROGUESQ_LLE_FORCE` | off | Route `M_GFXTASK` through the recompiled RSP ucode + `dpc_bridge.cpp` instead of RT64 HLE. Diagnostic only — semi-broken (cinematic tasks hit an unhandled jump). Companions `ROGUESQ_LLE_UNGATED` (skip the attribution-page gate) and `ROGUESQ_LLE_SOLO` (skip the HLE fallthrough). |
 
@@ -107,6 +108,16 @@ unless set.
 | `ROGUESQ_TEX_FILTER` | `aa` | Texture filtering: `nearest` / `linear` / `aa` (AntiAliasedPixelScaling). |
 | `ROGUESQ_RT_INTERP` | off | Enable RT64 frame interpolation to `<hz>` (default 60): `refreshRate=Manual`, `refreshRateTarget=hz`. Gives smooth 60fps motion via RT64's built-in AUTO geometric matcher (validated on the Factor 5 path: smooth, nearly flicker-free) with no per-object id stamping needed. Off by default (`refreshRate=Original` = no interpolation). |
 | `ROGUESQ_TEXTURE_PACK` | (unset) | Load an RT64 texture-replacement pack (a directory or `.zip` containing `rt64.json` + DDS/PNG) and enable replacements. F5 loads textures through the normal RDP TMEM path so RT64's content hashes are stable — packs resolve exactly as for a stock-ucode game. Applied after `app->setup()` via `textureCache->loadReplacementDirectories`. Authoring a pack uses RT64's developer dump workflow (see Zelda64Recomp's texture-pack tooling); the loader here is the runtime consumer. |
+
+### Input / controls
+
+Keyboard, mouse, and gamepad bindings load from `roguesq_input.json` next to the
+exe (written with defaults on first run). Rebind in-app via **F1 then F6**
+(the Controls window). Backtick toggles mouse-steering capture.
+
+| Env Var | Default | Effect |
+|---|---|---|
+| `ROGUESQ_INPUT_RESET` | off | `1` overwrites `roguesq_input.json` with the default bindings at startup. |
 
 ## How to add a new debug trace
 

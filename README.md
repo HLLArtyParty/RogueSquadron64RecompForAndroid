@@ -118,22 +118,38 @@ Edit the toml, then re-run `regen_funcs` to apply. For larger game-logic overrid
 
 Put `rogue_squadron.z64` next to the executable and launch it. The ROM hash is checked at startup.
 
-## Controls (gamepad)
+## Controls
 
-| N64 | Action | Gamepad |
-|---|---|---|
-| Analog stick | Steer / bank | Left stick |
-| A | Fire lasers | A |
-| B | Drop bombs | X |
-| Z | Brake | Left trigger |
-| R | Boost | Right shoulder |
-| L | Targeting computer | Left shoulder |
-| D-Pad | Throttle / trim | D-Pad |
-| C-Up / C-Down | Cycle views | Y / B |
-| C-Left / C-Right | Roll | Back / Guide |
-| Start | Pause | Start |
+Keyboard, mouse, and gamepad all work; no controller is required. Defaults:
 
-Keyboard input is not implemented.
+| N64 | Action | Keyboard | Gamepad |
+| --- | --- | --- | --- |
+| Analog stick | Steer / bank | WASD / arrows | Left stick |
+| A | Fire lasers | Space | A |
+| B | Drop bombs | Left Shift | X |
+| Z | Brake | Left Ctrl | Left trigger |
+| R | Boost | E | Right shoulder |
+| L | Targeting computer | Q | Left shoulder |
+| D-Pad | Throttle / trim | Numpad 8/4/2/6 | D-Pad |
+| C-Up / C-Down | Cycle views | I / K | Y / B |
+| C-Left / C-Right | Roll | J / L | Back / Guide |
+| Start | Pause | Enter | Start |
+
+**Mouse flight steering:** press the backtick key (`` ` ``) to toggle mouse
+capture — mouse motion then steers the craft, left/right click fire lasers /
+drop bombs. `Esc` releases capture.
+
+### Rebinding controls
+
+Press **F6** to open the **Controls** window. Click **Rebind** on any action and
+press the key, gamepad button, or mouse button to assign it; **Clear** removes a
+binding. Adjust mouse sensitivity and invert there, then **Save** (or **Restore
+defaults**). Bindings persist to `roguesq_input.json` next to the executable,
+which you can also hand-edit.
+
+> In Debug builds (developer mode on by default) the RT64 inspector owns the
+> ImGui overlay, so press **F1** once before **F6**. Release builds open the
+> Controls window with **F6** directly.
 
 ---
 

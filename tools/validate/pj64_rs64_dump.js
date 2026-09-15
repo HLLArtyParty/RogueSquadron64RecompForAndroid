@@ -29,7 +29,10 @@ events.onexec(0x800AA658, function () {                 // tickCutsceneActionSlo
     if (frame == 600) dump("cine_frame600");
     if (frame == 900) dump("cine_frame900");
 });
-events.onexec(0x80000B20, function () { console.log("[rs64_dump] loadOverlay a0=" + cpu.gpr.a0); });
+var laOn = false, laGf = 0;
+events.onexec(0x80000B20, function () { console.log("[rs64_dump] loadOverlay a0=" + cpu.gpr.a0); if (cpu.gpr.a0 == 2 && !laOn) { laOn = true; laGf = 0; } });
+// LucasArts flyover goldens: every 30th submitGfxFrame after the cinematic overlay first loads.
+events.onexec(0x8000C07C, function () { if (!laOn) return; laGf++; if (laGf >= 420 && laGf <= 560 && laGf % 20 == 0) dump("la_gf" + laGf); });
 // Sky/horizon handler DRAW branch (cinematicSplineWalkerNpcHandler a1==4, 0x8005C378). Mirrors the
 // recomp probe: dump a golden at draw #200 (Tatooine demo, ~77s) so we can compare hardware's sky
 // modelview (0x80700040) against ours. See plans/skybox-not-rendering-plan.md.

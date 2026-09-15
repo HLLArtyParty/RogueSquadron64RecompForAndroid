@@ -16,6 +16,10 @@ static unsigned g_rs64_audio_underruns = 0;   // dry-queue arrivals (see queue_s
 #include "librecomp/game.hpp"
 #include "librecomp/rsp.hpp"
 #include "common/rt64_common.h"
+#include "imgui/imgui.h"
+#include "rhi/rt64_render_hooks.h"
+#include "input_bindings.h"
+#include <mutex>
 
 #define SDL_MAIN_HANDLED
 #ifdef _WIN32
@@ -1240,9 +1244,33 @@ static bool fake_controller_enabled() {
     return s;
 }
 
+// Active bindings + mouse-steering runtime state. poll_input and get_n64_input
+// run on the same game thread and in a paired sequence per controller read, so
+// the mouse accumulators are plain game-thread statics. g_mouse_capture is read
+// from update_gfx (main thread) to toggle relative-mouse mode, so it is atomic.
+static rs64::input::Bindings g_bindings = rs64::input::default_bindings();
+static std::mutex            g_bindings_mtx;    // UI thread mutates, game thread reads
+static std::atomic<bool>     g_show_controls{false};
+static std::atomic<bool>     g_mouse_capture{false};
+static float                 g_mouse_ax = 0.0f;   // accumulated relative motion this frame
+static float                 g_mouse_ay = 0.0f;
+static uint32_t              g_mouse_btn = 0;
+
 static void poll_input() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
+        // F6 toggles the controls/rebind window; grave toggles mouse-steering
+        // capture; Esc releases capture or closes the controls window.
+        if (e.type == SDL_KEYDOWN && e.key.repeat == 0) {
+            if (e.key.keysym.scancode == SDL_SCANCODE_F6) {
+                g_show_controls.store(!g_show_controls.load());
+            } else if (e.key.keysym.scancode == SDL_SCANCODE_GRAVE) {
+                g_mouse_capture.store(!g_mouse_capture.load());
+            } else if (e.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+                if (g_show_controls.load()) g_show_controls.store(false);
+                else g_mouse_capture.store(false);
+            }
+        }
         if (e.type == SDL_QUIT) {
             fprintf(stderr, "[main] SDL_QUIT received, exiting\n");
             fflush(stderr);
@@ -1278,6 +1306,19 @@ static void poll_input() {
             }
         }
     }
+    // Drain SDL's relative-motion accumulator once per poll. Read from the
+    // internal state (updated before RT64's event filter), so capture is robust
+    // in dev mode. Only feed the resolver while capture is engaged.
+    int rdx = 0, rdy = 0;
+    uint32_t rbtn = SDL_GetRelativeMouseState(&rdx, &rdy);
+    if (g_mouse_capture.load()) {
+        g_mouse_ax += (float)rdx;
+        g_mouse_ay += (float)rdy;
+        g_mouse_btn = rbtn;
+    } else {
+        g_mouse_ax = g_mouse_ay = 0.0f;
+        g_mouse_btn = 0;
+    }
 }
 
 // BOOT_TARGET: while the FrontEnd attract-title is up, the present hook sets this
@@ -1290,63 +1331,53 @@ static inline uint16_t boot_start_pulse() {
 }
 
 static bool get_n64_input(int controller_num, uint16_t* buttons, float* x, float* y) {
-    if (controller_num != 0 || !controller) {
-        // Fake-controller: report connected + neutral so headless runs clear the
-        // "NO CONTROLLER" gate. Optionally pulse START to advance through prompts.
-        if (controller_num == 0 && fake_controller_enabled()) {
-            uint16_t btn = 0;
+    if (controller_num != 0) {
+        *buttons = 0; *x = 0.0f; *y = 0.0f;
+        return false;
+    }
+
+    // While the controls window is open, suppress gameplay input so rebinding
+    // or navigating the UI doesn't also drive the ship. Still report connected.
+    if (g_show_controls.load()) {
+        *buttons = 0; *x = 0.0f; *y = 0.0f;
+        return true;
+    }
+
+    // Resolve keyboard + gamepad + mouse through the bindings profile.
+    rs64::input::RawState st;
+    st.keys = SDL_GetKeyboardState(&st.keys_len);
+    st.pad = controller;
+    st.mouse_active = g_mouse_capture.load();
+    if (st.mouse_active) {
+        st.mouse_dx = g_mouse_ax; st.mouse_dy = g_mouse_ay;
+        st.mouse_buttons = g_mouse_btn;
+    }
+    g_mouse_ax = g_mouse_ay = 0.0f;  // consume this frame's accumulated motion
+
+    uint16_t btn = 0;
+    bool active;
+    { std::lock_guard<std::mutex> lk(g_bindings_mtx);
+      active = rs64::input::resolve(g_bindings, st, &btn, x, y); }
+
+    if (!active) {
+        // No keyboard and no gamepad: keep the fake-controller path so headless
+        // runs still clear the "NO CONTROLLER" gate.
+        if (fake_controller_enabled()) {
             static int s_auto = -1;
             if (s_auto < 0) { const char* v = std::getenv("ROGUESQ_AUTO_START"); s_auto = (v && v[0]) ? atoi(v) : 0; }
-            if (s_auto > 0) {
-                uint32_t t = SDL_GetTicks();
-                // ~120ms START pulse every s_auto ms.
-                if ((t % (uint32_t)s_auto) < 120u) btn |= N64_START_BUTTON;
-            }
-            btn |= boot_start_pulse();
-            *buttons = btn; *x = 0.0f; *y = 0.0f;
+            uint16_t fb = 0;
+            if (s_auto > 0 && (SDL_GetTicks() % (uint32_t)s_auto) < 120u) fb |= N64_START_BUTTON;
+            fb |= boot_start_pulse();
+            *buttons = fb; *x = 0.0f; *y = 0.0f;
             return true;
         }
         *buttons = 0; *x = 0.0f; *y = 0.0f;
         return false;
     }
 
-    uint16_t btn = 0;
-    auto b = [&](uint16_t mask, SDL_GameControllerButton sdl) {
-        if (SDL_GameControllerGetButton(controller, sdl)) btn |= mask;
-    };
-
-    // Rogue Squadron N64 → modern gamepad mapping:
-    //   A (fire)        → face A
-    //   B (bombs)       → face X
-    //   Z (brake)       → left trigger (digital, via axis threshold below)
-    //   R (boost)       → right shoulder
-    //   L (targeting)   → left shoulder
-    //   C-Up (view)     → right stick up (handled via axis) — face Y as fallback
-    //   C-Down          → face B
-    //   C-Left          → right stick left (axis) — d-left as fallback
-    //   C-Right         → right stick right (axis) — d-right as fallback
-    //   D-Pad           → d-pad
-    //   Start           → start
-    b(N64_A_BUTTON,     SDL_CONTROLLER_BUTTON_A);
-    b(N64_B_BUTTON,     SDL_CONTROLLER_BUTTON_X);
-    b(N64_START_BUTTON, SDL_CONTROLLER_BUTTON_START);
-    b(N64_U_JPAD,       SDL_CONTROLLER_BUTTON_DPAD_UP);
-    b(N64_D_JPAD,       SDL_CONTROLLER_BUTTON_DPAD_DOWN);
-    b(N64_L_JPAD,       SDL_CONTROLLER_BUTTON_DPAD_LEFT);
-    b(N64_R_JPAD,       SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
-    b(N64_L_TRIG,       SDL_CONTROLLER_BUTTON_LEFTSHOULDER);   // targeting computer
-    b(N64_R_TRIG,       SDL_CONTROLLER_BUTTON_RIGHTSHOULDER);  // boost/accelerate
-    b(N64_U_CBUTTONS,   SDL_CONTROLLER_BUTTON_Y);
-    b(N64_D_CBUTTONS,   SDL_CONTROLLER_BUTTON_B);
-    b(N64_L_CBUTTONS,   SDL_CONTROLLER_BUTTON_BACK);
-    b(N64_R_CBUTTONS,   SDL_CONTROLLER_BUTTON_GUIDE);
-    // Z trigger (brake) from left analog trigger axis
-    if (SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 16000) btn |= N64_Z_TRIG;
-
-    int16_t ax = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTX);
-    int16_t ay = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTY);
-    *x = ax / 32767.0f;
-    *y = -(ay / 32767.0f); // N64 Y is inverted vs SDL
+    static int s_auto = -1;
+    if (s_auto < 0) { const char* v = std::getenv("ROGUESQ_AUTO_START"); s_auto = (v && v[0]) ? atoi(v) : 0; }
+    if (s_auto > 0 && (SDL_GetTicks() % (uint32_t)s_auto) < 120u) btn |= N64_START_BUTTON;
     btn |= boot_start_pulse();
     *buttons = btn;
     return true;
@@ -1355,10 +1386,111 @@ static bool get_n64_input(int controller_num, uint16_t* buttons, float* x, float
 static void set_rumble(int, bool) {}
 
 static ultramodern::input::connected_device_info_t get_connected_device_info(int controller_num) {
-    if (controller_num == 0 && (controller || fake_controller_enabled())) {
+    if (controller_num == 0 && (controller || g_bindings.keyboard_enabled || fake_controller_enabled())) {
         return { ultramodern::input::Device::Controller, ultramodern::input::Pak::None };
     }
     return { ultramodern::input::Device::None, ultramodern::input::Pak::None };
+}
+
+// Controls / rebind window. Runs on the RT64 graphics thread via the ImGui hook
+// (SetRenderHookImgui), between NewFrame and Render. All g_bindings mutation is
+// under g_bindings_mtx since get_n64_input reads it on the game thread. Only
+// active in developer mode (the inspector frame); F6 toggles visibility.
+static void draw_controls_ui() {
+    if (!g_show_controls.load()) return;
+    namespace ri = rs64::input;
+
+    static int capture_target = -1;                 // Target awaiting a new bind
+    static uint8_t prev_keys[SDL_NUM_SCANCODES] = {0};
+    static uint32_t prev_pad = 0, prev_mouse = 0;
+
+    ImGui::SetNextWindowSize(ImVec2(540, 470), ImGuiCond_FirstUseEver);
+    bool open = true;
+    if (ImGui::Begin("Controls", &open)) {
+        // Action row at the top so it stays visible even if the window is taller
+        // than the game viewport.
+        if (ImGui::Button("Save")) {
+            std::lock_guard<std::mutex> lk(g_bindings_mtx);
+            rs64::input::save_bindings(g_bindings, rs64::input::default_config_path());
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Restore defaults")) {
+            std::lock_guard<std::mutex> lk(g_bindings_mtx);
+            g_bindings = rs64::input::default_bindings();
+            rs64::input::save_bindings(g_bindings, rs64::input::default_config_path());
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Close")) g_show_controls.store(false);
+        ImGui::Separator();
+        ImGui::TextWrapped("Click Rebind, then press a key, gamepad button, or mouse button. Esc cancels a rebind.");
+        {
+            std::lock_guard<std::mutex> lk(g_bindings_mtx);
+            ImGui::SliderFloat("Mouse sensitivity", &g_bindings.mouse_sensitivity, 0.005f, 0.30f, "%.3f");
+            ImGui::Checkbox("Invert X", &g_bindings.mouse_invert_x); ImGui::SameLine();
+            ImGui::Checkbox("Invert Y", &g_bindings.mouse_invert_y);
+        }
+        ImGui::TextDisabled("Backtick toggles mouse-steering; F6 or Esc closes this.");
+        ImGui::Separator();
+
+        // Edge-detect a captured input while a rebind is pending.
+        if (capture_target >= 0) {
+            int nk = 0; const uint8_t* ks = SDL_GetKeyboardState(&nk);
+            if (ks[SDL_SCANCODE_ESCAPE]) {
+                capture_target = -1;
+            } else {
+                ri::Source got; bool have = false;
+                for (int sc = 0; sc < nk && !have; ++sc)
+                    if (sc != SDL_SCANCODE_ESCAPE && ks[sc] && !prev_keys[sc]) { got = { ri::SourceKind::Key, sc, 0 }; have = true; }
+                if (!have && controller)
+                    for (int b = 0; b < SDL_CONTROLLER_BUTTON_MAX && !have; ++b) {
+                        bool now = SDL_GameControllerGetButton(controller, (SDL_GameControllerButton)b);
+                        if (now && !((prev_pad >> b) & 1)) { got = { ri::SourceKind::PadButton, b, 0 }; have = true; }
+                    }
+                if (!have) {
+                    uint32_t mb = SDL_GetMouseState(nullptr, nullptr);
+                    for (int b = 1; b <= 5 && !have; ++b)
+                        if ((mb & SDL_BUTTON(b)) && !(prev_mouse & SDL_BUTTON(b))) { got = { ri::SourceKind::MouseButton, b, 0 }; have = true; }
+                }
+                if (have) {
+                    std::lock_guard<std::mutex> lk(g_bindings_mtx);
+                    g_bindings.targets[capture_target].clear();
+                    g_bindings.targets[capture_target].push_back(got);
+                    capture_target = -1;
+                }
+            }
+        }
+        { int nk = 0; const uint8_t* ks = SDL_GetKeyboardState(&nk);
+          int n = nk < (int)SDL_NUM_SCANCODES ? nk : (int)SDL_NUM_SCANCODES; memcpy(prev_keys, ks, n); }
+        prev_pad = 0;
+        if (controller) for (int b = 0; b < SDL_CONTROLLER_BUTTON_MAX; ++b)
+            if (SDL_GameControllerGetButton(controller, (SDL_GameControllerButton)b)) prev_pad |= (1u << b);
+        prev_mouse = SDL_GetMouseState(nullptr, nullptr);
+
+        ImGui::BeginChild("binds", ImVec2(0, 0), true);
+        {
+            std::lock_guard<std::mutex> lk(g_bindings_mtx);
+            for (int t = 0; t < ri::target_count(); ++t) {
+                ImGui::PushID(t);
+                ImGui::Text("%s", ri::target_label((ri::Target)t));
+                ImGui::SameLine(120);
+                if (capture_target == t) {
+                    ImGui::TextColored(ImVec4(1, 1, 0, 1), "[press an input...]");
+                } else {
+                    std::string b;
+                    for (const auto& s : g_bindings.targets[t]) { if (!b.empty()) b += ", "; b += ri::source_label(s); }
+                    ImGui::TextUnformatted(b.empty() ? "(unbound)" : b.c_str());
+                }
+                ImGui::SameLine(330);
+                if (ImGui::SmallButton("Rebind")) capture_target = t;
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Clear")) g_bindings.targets[t].clear();
+                ImGui::PopID();
+            }
+        }
+        ImGui::EndChild();
+    }
+    ImGui::End();
+    if (!open) g_show_controls.store(false);
 }
 
 // ---------------------------------------------------------------------------
@@ -1414,6 +1546,18 @@ void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
     // intercepts F1-F4 here (filters run before SDL_PollEvent dequeues), so
     // the controller-input poll on the game thread never sees those keys.
     SDL_PumpEvents();
+
+    // Mouse-steering capture: relative mode on only while engaged and focused.
+    // Toggled from the game thread (grave/Esc in poll_input); applied here on the
+    // window-owning thread. Drain the accumulator on each transition so enabling
+    // doesn't produce a jump from motion that happened while released.
+    static bool s_rel = false;
+    bool want = g_mouse_capture.load() && !g_show_controls.load() && (SDL_GetKeyboardFocus() != nullptr);
+    if (want != s_rel) {
+        SDL_SetRelativeMouseMode(want ? SDL_TRUE : SDL_FALSE);
+        SDL_GetRelativeMouseState(nullptr, nullptr);
+        s_rel = want;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1770,6 +1914,24 @@ int main(int argc, char* argv[]) {
     if (int rc = apply_cli_args(argc, argv); rc >= 0) {
         return rc;
     }
+
+    // Input bindings: load roguesq_input.json next to the exe, or write the
+    // defaults as an editable template if it's absent. ROGUESQ_INPUT_RESET=1
+    // overwrites it with defaults.
+    {
+        std::string cfg = rs64::input::default_config_path();
+        const char* reset = std::getenv("ROGUESQ_INPUT_RESET");
+        bool force = reset && reset[0] && reset[0] != '0';
+        if (force || !rs64::input::load_bindings(g_bindings, cfg)) {
+            g_bindings = rs64::input::default_bindings();
+            rs64::input::save_bindings(g_bindings, cfg);
+            fprintf(stderr, "[input] wrote default bindings to %s\n", cfg.c_str());
+        } else {
+            fprintf(stderr, "[input] loaded bindings from %s\n", cfg.c_str());
+        }
+        fflush(stderr);
+    }
+    RT64::SetRenderHookImgui(&draw_controls_ui);
 
 #ifdef _WIN32
     // Log PE base so we can resolve absolute addresses from SEH logs to RVAs

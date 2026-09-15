@@ -753,9 +753,26 @@ private:
             if (vi_count_ < std::atoi(s_at_vi)) return;
             std::snprintf(tag, sizeof tag, "vi_%d", vi_count_);
         } else if (s_on_cine) {
+            // Comma-separated list: one dump per listed iteration (ROGUESQ_DUMP_RDRAM_PATH ignored for lists).
+            static std::vector<unsigned long long> s_iters; static size_t s_next = 0;
+            if (s_iters.empty()) { for (const char* c = s_on_cine; *c; ) { s_iters.push_back((unsigned long long)std::strtoull(c, (char**)&c, 10)); if (*c == ',') ++c; else break; } if (s_iters.empty()) s_iters.push_back(0); }
             const unsigned long long it = rs64_cine_iter_get();
-            if (it < (unsigned long long)std::atoll(s_on_cine)) return;
+            if (s_next >= s_iters.size() || it < s_iters[s_next]) return;
+            ++s_next;
             std::snprintf(tag, sizeof tag, "cine_iter%llu", it);
+            if (s_next < s_iters.size()) {
+                char path2[512]; std::snprintf(path2, sizeof path2, "dumps/rdram_%s.bin", tag);
+                if (FILE* f2 = fopen(path2, "wb")) {
+                    static uint8_t buf2[0x10000];
+                    for (uint32_t base = 0; base < 0x800000u; base += sizeof buf2) {
+                        for (uint32_t i = 0; i < sizeof buf2; ++i) buf2[i] = app->core.RDRAM[(base + i) ^ 3];
+                        fwrite(buf2, 1, sizeof buf2, f2);
+                    }
+                    fclose(f2);
+                    fprintf(stderr, "[rdram-dump] vi=#%u cine_iter=%llu -> %s (ok)\n", vi_count_, it, path2); fflush(stderr);
+                }
+                return;
+            }
         } else if (s_on_stall) {
             const uint32_t it = rd32(0x13889C);
             static uint32_t s_last_it = 0;
