@@ -13,6 +13,14 @@ A static recompilation of **Star Wars: Rogue Squadron** (N64, USA v1.0) built wi
 >
 > **Heavily AI-assisted.** Most of the debugging, architectural decisions, and code here (the F3DFACTOR5 GBI module, the runtime patches inside `lib/`, `src/main/`, the `patches/` pipeline, the diagnostic env vars) were produced with Claude. Many choices are pragmatic workarounds rather than principled fixes, and the architectural conclusions should be scrutinized rather than trusted. Issues, corrections, and second opinions are welcome.
 
+---
+
+'*first-attempt*' branch **is** the farthest I have gotten. Second attempt was a more higher level focus but ended up slowly drifting back to what first attempt was which is mostly LLE focused. I tried to go away from that because debugging and printing data from assembly gets very hairy. Since my experience with assembly is limited to just my comp. architecture class, I feel like I've done all that I can. Hopefully this project can be used as a good jumping off point for the whole recomp project. 
+
+To anyone in the future willing to take this on: **May the force be with you**
+
+---
+
 <div align="center">
 
 ### Screenshots
