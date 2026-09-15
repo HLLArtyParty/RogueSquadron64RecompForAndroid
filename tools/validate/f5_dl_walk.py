@@ -18,14 +18,21 @@ ap.add_argument('--json', action='store_true', help='emit normalized diff-friend
 ap.add_argument('--b4', choices=('auto', '16', '32'), default='auto',
                 help="0xB4 stride rule: auto=32 if w0&2 else 16 (hardware); 32=live op_b4_quad's unconditional rule (for A/B)")
 ap.add_argument('--tex', action='store_true',
-                help="decode per-face UVs (raw 8.8 + texel) and bound texture state; prints a UV/material summary "
-                     "(with --json, adds st/idx/tex fields to face records). Stream-first UV investigation.")
+                help="decode per-face UVs (raw + texel via the 03 82 scale) and bound texture state; prints a "
+                     "UV/material summary (with --json, adds st/idx/tex fields to face records).")
+ap.add_argument('--legacy-uv', action='store_true', help="texel = raw/256 (ignore the 03 82 texcoord scale)")
 a = ap.parse_args()
 d = open(a.dump, 'rb').read()
 def W(x): return struct.unpack('>I', d[x:x+4])[0]
-def s16(v):                       # F5 packs each texcoord halfword as signed 8.8 texels
+def s16(v):                       # texcoord halfwords are signed 16-bit
     v &= 0xFFFF
     return v - 0x10000 if (v & 0x8000) else v
+# 03 82 = texcoord scale (16.16, s then t). The ucode multiplies each raw per-face UV by it to get
+# S10.5; the game sends (W-1)/128 per material, so raw UVs are 4.12 normalized (0x1000 = one tile).
+tc_scale = [0, 0]
+def tc_apply(raw, scale):
+    v = (raw * scale) >> 16
+    return max(-32768, min(32767, v))
 start = (W(0x377C8 + 0x30) if a.addr == 'task' else int(a.addr, 16)) & 0xFFFFFF
 KNOWN = set([0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
              0x11, 0x12, 0x13, 0x14, 0x80, 0xAF, 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA,
@@ -44,7 +51,7 @@ steps = 0; hist = []; unknown = 0; first_unknown = None; faces = 0; rects = 0; e
 # (different allocation addresses) produce identical record streams; real structural differences remain.
 records = []; chunk_ords = {}
 # --tex: running RDP texture state so each textured face can be tagged with the material it draws with,
-# and an aggregate of emitted UVs (raw 8.8 texels + texel = raw/256) to expose flip/swap at a glance.
+# and an aggregate of emitted UVs (raw + texel after the 03 82 scale) to expose flip/swap at a glance.
 tex = {'timg': None, 'fmt': None, 'siz': None, 'line': None, 'tmem': None, 'pal': None,
        'tile': None, 'w': None, 'h': None, 'sc': None, 'tc': None,
        'cms': None, 'cmt': None, 'masks': None, 'maskt': None,   # wrap modes + mask (wrap period = 2^mask)
@@ -56,13 +63,16 @@ def decode_face_uv(pc, op, w0, w1):
     op_bf_tri / op_b4_quad / op_13_quad: st words at +16,+20,+24(,+28); s=hi16, t=lo16 (signed 8.8)."""
     quad = op in (0xB4, 0x13)
     if quad:
-        idx = [(w1 >> 24) // 5, ((w1 >> 16) & 0xFF) // 5, ((w1 >> 8) & 0xFF) // 5, (w1 & 0xFF) // 5]
+        idx = [((w1 >> 16) & 0xFF) // 5, ((w1 >> 8) & 0xFF) // 5, (w1 & 0xFF) // 5, (w1 >> 24) // 5]   # ucode: bytes 1,2,3,0
         words = [W(pc + 16), W(pc + 20), W(pc + 24), W(pc + 28)]
     else:
         idx = [((w1 >> 16) & 0xFF) // 5, ((w1 >> 8) & 0xFF) // 5, (w1 & 0xFF) // 5]
         words = [W(pc + 16), W(pc + 20), W(pc + 24)]
-    st_raw = [[s16(x >> 16), s16(x & 0xFFFF)] for x in words]   # raw signed 8.8 texels
-    texel = [[s / 256.0, t / 256.0] for s, t in st_raw]         # 8.8 -> texel units
+    st_raw = [[s16(x >> 16), s16(x & 0xFFFF)] for x in words]   # raw signed 16-bit
+    if a.legacy_uv:
+        texel = [[s / 256.0, t / 256.0] for s, t in st_raw]     # old reading: raw as 8.8 texels
+    else:
+        texel = [[tc_apply(s, tc_scale[0]) / 32.0, tc_apply(t, tc_scale[1]) / 32.0] for s, t in st_raw]
     return idx, st_raw, texel
 def cord(off):
     off &= 0xFFFFFF
@@ -123,7 +133,12 @@ while steps < a.max and not ended:
         ended = True; break
     elif op == 0x05: ln = 40 if ((w0 >> 16) & 0xFF) == 5 else 8
     elif op in (0xBE, 0xBD, 0x14, 0x09, 0x0A): ln = 16
-    elif op == 0x03: ln = 24
+    elif op == 0x03:
+        ln = 24
+        if ((w0 >> 16) & 0xFF) == 0x82:
+            hi, lo = W(pc + 8), W(pc + 16)
+            tc_scale[0] = s16(hi >> 16) * 65536 + (lo >> 16)
+            tc_scale[1] = s16(hi & 0xFFFF) * 65536 + (lo & 0xFFFF)
     elif op in (0xBF, 0x08, 0x13): ln = 32 if (w0 & 2) else 16
     elif op == 0xB4: ln = 32 if a.b4 == '32' else (16 if a.b4 == '16' else (32 if (w0 & 2) else 16))
     elif op not in KNOWN:

@@ -236,18 +236,18 @@ would otherwise walk the free list).
 |---|---|---|---|
 | `01` | `0x1484` | DMA 64 B matrix from w1: byte1 bit0 = 0 modelview (DMEM `0x5D0`, then MVP = MV x P into `0x610`), 1 = projection (`0x590`) | 8 |
 | `02` | `0x14F0` | DMA `(w0&0xFFFF)+1` bytes from w1 into `0xB70` = per-vertex RGBA colors | 8 |
-| `03` | `0x14D4` | byte1 selects a DMEM slot (table `0x46`); the next 16 B are stored inline. `03 80` = viewport (vscale x,y,z,pad / vtrans x,y,z,pad, 2-bit fixed); `03 82` = lookat/light block | 24 |
+| `03` | `0x14D4` | byte1 selects a DMEM slot (table `0x46`); the next 16 B are stored inline. `03 80` = viewport (vscale x,y,z,pad / vtrans x,y,z,pad, 2-bit fixed); `03 82` = texcoord scale (4 hi + 4 lo halfwords, 16.16 s,t,s,t; DMEM 0x140) multiplied into every per-face UV | 24 |
 | `04` | `0x15B4` | DMA `(w0&0x3FF)+1` bytes from w1 into `0x280`; `(w0>>10)&0x3F` 8-byte vertices (x,y,z int16, pad) | 8 |
 | `05` | `0x15AC` | load overlay 0xC: `05 05 02 ..` = flat terrain tile (below); `05 05 00 ..` = heightfield tile (overlays 0x14/0x18, not yet in the HLE) | 40 |
-| `BF` / `08` | `0x146C` | triangle: w1 bytes 1..3 = vertex slot (byte/5 = index), word2 bytes = per-vertex color offsets into `0xB70`, word3 = flags; `w0&2` = textured, 16 B of (s,t) 8.8 texels follow | 32 / 16 |
-| `B4` / `13` | `0x1484`-0x80 | quad: as `BF` plus the 4th vertex from w1 byte0; emits two triangles | 32 / 16 |
+| `BF` / `08` | `0x146C` | triangle: w1 bytes 1..3 = vertex slot (byte/5 = index), word2 bytes = per-vertex color offsets into `0xB70`, word3 = flags; `w0&2` = textured, 16 B of raw (s,t) halfwords follow, multiplied by the `03 82` texcoord scale (raw 0x1000 = one tile) | 32 / 16 |
+| `B4` / `13` | `0x1484`-0x80 | quad: as `BF` plus the 4th vertex from w1 byte0; vertex order = bytes 1,2,3,0 (colors + UVs in that order); tris (v0,v1,v2) (v0,v2,v3) | 32 / 16 |
 | `14`, `BD`, `BE` | `0x12EC`, `0x15A4`, `0x12E4` | 16-byte state commands (`BD` also loads overlay 0x2C) | 16 |
 | `06`, `07`, `B5`, `B8` | `0x12A0`, `0x12B8`, `0x10E0`, `0x12C4` | call, branch, next-chunk, return | 8 |
 | `E4`/`E5` | top2 = 3 path | texrect copied to the RDP buffer | 16 |
 | `08..12` | shared table | aliases of `BF..B5` | as above |
 
 **Flat tile (`05 05 02 xx`, overlays 0xC then 0x24).** Word pairs after the command: w1 = (h0,h1),
-word2 = (h2,h3) corner heights; word3..word6 = corner RGBA; word7.lo = texcoord size (8.8);
+word2 = (h2,h3) corner heights; word3..word6 = corner RGBA; word7.lo = texcoord span (S10.5, stored into the vertex as-is by overlay 0x24; grid overlay 0x10 steps it per sample, t decreasing along z);
 word8 = (x, y>>4); word9 = (z, size). Corners v0=(x,y+h0,z) v1=(x+size,y+h1,z) v2=(x,y+h2,z+size)
 v3=(x+size,y+h3,z+size), UVs v0 (0,s) v1 (s,s) v2 (0,0) v3 (s,0), transformed by the current MVP.
 
