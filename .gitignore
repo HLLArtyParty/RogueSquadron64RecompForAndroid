@@ -28,6 +28,11 @@ crash_*.dmp
 RecompiledFuncs/
 RecompiledPatches/
 
+# Patches build byproducts (only the *.c sources + syms.ld/patches.ld/Makefile are source)
+patches/*.d
+patches/patches.bin
+patches/patches.map
+
 # Build directories
 build*/
 build-*
@@ -73,7 +78,6 @@ RSPRecomp
 
 # Misc
 *.lnk
-/.claude
 
 # Debug captures and logs (developer-local)
 *_log.txt
@@ -104,3 +108,9 @@ dumps/
 mqdiag_*.txt
 /.agents
 skills-lock.json
+/wav
+/tools/__pycache__
+/tools/rename
+*.csv
+/tools/validate/__pycache__
+/plans

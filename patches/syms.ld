@@ -13,9 +13,13 @@ __start = 0x80000000;
 /* (none yet — populate when we need them) */
 
 /* --- Game functions called from patches --------------------------------- */
-/* heap_guards.c calls func_8002221C (alloc helper). Address from
- * syms/rogue_squadron.syms.toml. */
-func_8002221C = 0x8002221C;
+/* heap_guards.c (currently DISABLED -> patches/disabled/) calls
+ * findAndUnlinkSmallestEntry. NOTE: an absolute address here is required for ld
+ * to emit the jal, but then N64Recomp fails to resolve it ("No function found
+ * for jal target 0x8002221C") -- a patches-recompile limitation for patch->game
+ * function calls that is unresolved. Kept for when that's fixed + heap_guards
+ * is re-enabled. See plans/wire-register-patches note. */
+findAndUnlinkSmallestEntry = 0x8002221C;
 
 /* --- Game data symbols touched by patches ------------------------------- */
 /* heap_guards.c reads/writes these globals. Addresses are static RAM slots
@@ -30,3 +34,6 @@ heap_free_head      = 0x801163B0;
 heap_other_listhead = 0x801163FC;
 heap_tail_loc       = 0x8011A7DC;
 heap_bump           = 0x801163D4;
+
+/* npc_health_guard.c reads the health-table current-slot index. */
+npcHealthTableIndex = 0x80137CE4;

@@ -129,6 +129,60 @@ if is_main_ucode and ITER_MARKER not in text:
         text = l1090_pattern.sub(lambda m: replacement, text, count=1)
 
 # ---------------------------------------------------------------------------
+# Fixup 3: top-level-exit + runaway cap for the MusyX audio ucode (musyx_audio only).
+# THE KEY FIX: the synth's top-level `jr $ra` returns with r31=0 (musyx_audio inits
+# all regs to 0 and the OS-set return addr isn't modelled), so jump_target=0 →
+# the do_indirect_jump switch maps (0|0x1000)&0x1FFF = 0x1000 = L_1000 (function
+# start) → the whole synth RE-RUNS forever, ~1M spins/task = ~42ms of pure waste,
+# producing silence and freezing the boot (≈20 audio tasks/frame at the attribution
+# screen × 42ms ≈ 1fps). 0 is never a valid IMEM target, so jump_target==0 is
+# unambiguously the task-complete handoff: RETURN instead of looping. This drops
+# the synth from ~42ms to ~0ms and unfreezes boot. The 1<<20 counter stays as a
+# backstop for any OTHER runaway (and to surface its jump_target).
+# ---------------------------------------------------------------------------
+MUSYX_MARKER = "/* fixup: musyx runaway cap */"
+is_musyx = "musyx_audio(" in text
+if is_musyx and MUSYX_MARKER not in text:
+    entry_pattern = re.compile(r"(\n    RSP rsp\{\};\n)")
+    if entry_pattern.search(text):
+        text = entry_pattern.sub(
+            r"\1    long rs64_iter = 0;  " + MUSYX_MARKER + "\n",
+            text, count=1)
+    dij_pattern = re.compile(r"(do_indirect_jump:\n)")
+    if dij_pattern.search(text):
+        replacement = (
+            "do_indirect_jump:\n"
+            "    if (jump_target == 0) {  " + MUSYX_MARKER + " top-level jr $ra (r31=0) = task complete */\n"
+            "        return RspExitReason::Broke;\n"
+            "    }\n"
+            "    if (++rs64_iter > (1L<<20)) {  " + MUSYX_MARKER + "\n"
+            "        static int rs64_musyx_cap = 0;\n"
+            "        if (++rs64_musyx_cap <= 4) {\n"
+            '            fprintf(stderr, "[musyx-cap] fired #%d, last jump_target=0x%04X\\n", rs64_musyx_cap, jump_target);\n'
+            "            fflush(stderr);\n"
+            "        }\n"
+            "        return RspExitReason::Broke;\n"
+            "    }\n"
+        )
+        text = dij_pattern.sub(lambda m: replacement, text, count=1)
+
+# ---------------------------------------------------------------------------
+# Fixup 4: L_13EC no-voice unblock (musyx_audio only).
+# L_13EC is the per-voice mix loop, back-edge `bne $26,$29` (advance r26 by 0x10
+# until r26==r29). On the silent/no-active-voice path r2=0 → r29 computed as 0,
+# but r26 enters un-reset (leftover, e.g. 0xC35010) → r26 never == 0 → infinite
+# spin, hanging the audio thread on every silent frame. Guard the back-edge so
+# the loop EXITS when r29==0 (a sample-end of 0 is never a real voice). Lets the
+# thread survive silent frames + keep processing tasks. (r29!=0 valid-voice paths
+# are unaffected.) Targets the bare back-edge goto, NOT the do_indirect_jump
+# `case 0x13EC: goto L_13EC;` dispatch line.
+MUSYX_13EC_MARKER = "/* no-voice unblock"
+if is_musyx and MUSYX_13EC_MARKER not in text:
+    be = re.compile(r"^(\s*)goto L_13EC;\s*$", re.MULTILINE)
+    text = be.sub(r"\1if (r29 != 0) goto L_13EC;  " + MUSYX_13EC_MARKER +
+                  ": r29==0 (null voice) → exit instead of spin */", text, count=1)
+
+# ---------------------------------------------------------------------------
 
 if text == original:
     sys.exit(0)

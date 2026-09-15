@@ -54,6 +54,11 @@ EXTRA_REVERTS = {
     "setGlobalBytes_8011A873_5": "func_80017B28",
     "setGlobalByte_8011A898":    "func_80017B48",
     "setGlobalFloat_8011A840":   "func_80017B78",
+    # The preBatchContinue baseline ELF pre-applied the old wrong name
+    # "unidentifiedServiceWorker" at 0x80022048, so the func_80022048 ->
+    # tickTextureMaterialExpiry redefine above no-ops (the func_ symbol is gone).
+    # Force the correct name regardless of which baseline is used.
+    "unidentifiedServiceWorker": "tickTextureMaterialExpiry",
 }
 with open(REDEFS, "a", encoding="utf-8") as f:
     for old, new in EXTRA_REVERTS.items():

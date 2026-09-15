@@ -51,8 +51,10 @@ add_compile_definitions(HLSL_CPU)
 # -DROGUESQ_DX12_DEBUG=ON when configuring CMake to enable.
 option(ROGUESQ_DX12_DEBUG "Enable D3D12 debug layer in RT64" OFF)
 if(ROGUESQ_DX12_DEBUG)
-    add_compile_definitions(D3D12_DEBUG_LAYER_ENABLED)
-    message(STATUS "D3D12 debug layer ENABLED")
+    # plume defines the BREAK_ON_* companion macros only under !NDEBUG, so the enable
+    # flag must be Debug-only — setting it in Release breaks the plume D3D12 build.
+    add_compile_definitions($<$<CONFIG:Debug>:D3D12_DEBUG_LAYER_ENABLED>)
+    message(STATUS "D3D12 debug layer ENABLED (Debug config only)")
 endif()
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_BINARY_DIR}/rt64)
 
@@ -60,8 +62,9 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_BINARY_DIR}/rt64)
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib/N64ModernRuntime ${CMAKE_BINARY_DIR}/N64ModernRuntime)
 
 # ---- RecompiledFuncs ----
-# Path to the N64Recomp output — adjust if you move the files
-set(RECOMP_FUNCS_DIR "${CMAKE_SOURCE_DIR}/../N64Recomp/RecompiledFuncs")
+# N64Recomp output. Gitignored (derivative of the copyrighted ROM; generated
+# locally, never committed). Regenerate with the `regen_funcs` target.
+set(RECOMP_FUNCS_DIR "${CMAKE_SOURCE_DIR}/RecompiledFuncs")
 
 add_library(RecompiledFuncs STATIC)
 
@@ -95,8 +98,10 @@ target_include_directories(RecompiledFuncs PRIVATE
     ${CMAKE_SOURCE_DIR}/lib/N64ModernRuntime/N64Recomp/include
 )
 
-file(GLOB RECOMP_C_SOURCES   ${RECOMP_FUNCS_DIR}/*.c)
-file(GLOB RECOMP_CXX_SOURCES ${RECOMP_FUNCS_DIR}/*.cpp)
+# CONFIGURE_DEPENDS: re-glob on build so a regen_funcs run that adds/removes a
+# file (e.g. lookup.cpp) is picked up without a manual reconfigure.
+file(GLOB RECOMP_C_SOURCES   CONFIGURE_DEPENDS ${RECOMP_FUNCS_DIR}/*.c)
+file(GLOB RECOMP_CXX_SOURCES CONFIGURE_DEPENDS ${RECOMP_FUNCS_DIR}/*.cpp)
 target_sources(RecompiledFuncs PRIVATE ${RECOMP_C_SOURCES} ${RECOMP_CXX_SOURCES})
 
 # ---- Patches (Zelda-style override layer) ----
@@ -143,8 +148,15 @@ if (EXISTS "${MIPS_GCC}" AND EXISTS "${N64RECOMP_EXE}" AND PATCHES_MAKE_EXE)
         VERBATIM
     )
 
-    # Step 3: build PatchesLib that wraps the recompiled output
-    add_library(PatchesLib STATIC "${RECOMPILED_PATCHES_DIR}/patches.c")
+    # Step 3: build PatchesLib that wraps the recompiled output.
+    # OBJECT (not STATIC): CMake splices its .obj directly onto the exe link
+    # line, so the patch symbols are strong command-line-object definitions.
+    # A .lib-vs-.lib pair is the documented failure mode -- /FORCE:MULTIPLE does
+    # NOT reliably let a static-lib override win an address-of reference (the
+    # func_map's &getNpcCurrentHealth bound to the RecompiledFuncs body instead,
+    # so the indirect LOOKUP_FUNC call reached the unguarded recompiled version
+    # and AV'd). An object beats an archive member regardless of link order.
+    add_library(PatchesLib OBJECT "${RECOMPILED_PATCHES_DIR}/patches.c")
     set_source_files_properties("${RECOMPILED_PATCHES_DIR}/patches.c"
         PROPERTIES GENERATED TRUE)
 
@@ -181,6 +193,23 @@ else()
     message(STATUS "  See patches/README.md for setup; rebuild without patches for now.")
 endif()
 
+# ---- Regenerate RecompiledFuncs (opt-in) ----
+# Runs N64Recomp on the in-repo rogue_squadron.toml, regenerating RecompiledFuncs/
+# from the decomp ELF (elf_path in the toml -> ../rogue_squadron64/build). Not in
+# the default build: regen is heavy and needs the ELF. Run explicitly, then re-run
+# cmake configure (RecompiledFuncs are globbed at configure time):
+#   cmake --build build --config Debug --target regen_funcs
+add_custom_target(regen_funcs
+    COMMAND ${N64RECOMP_EXE} "${CMAKE_SOURCE_DIR}/rogue_squadron.toml"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    COMMENT "Regenerating RecompiledFuncs from rogue_squadron.toml (needs decomp ELF + N64Recomp.exe)"
+    VERBATIM
+)
+# Build the recompiler first so a stale exe can't silently truncate the output.
+if (TARGET N64RecompCLI)
+    add_dependencies(regen_funcs N64RecompCLI)
+endif()
+
 # ---- Main executable ----
 # Hybrid graphics pipeline (2026-05-09):
 #   - HLE side: RT64's Factor 5 GBI module (lib/rt64/src/gbi/rt64_gbi_f3dfactor5.cpp)
@@ -197,6 +226,10 @@ endif()
 # Keeping LLE for now lets us ship visuals while migrating ops one at a time.
 set(FACTOR5_UCODE_C ${CMAKE_SOURCE_DIR}/build/factor5_ucode/factor5_ucode_recompiled.c)
 set(FACTOR5_BOOT_C  ${CMAKE_SOURCE_DIR}/build/factor5_ucode/factor5_boot_recompiled.c)
+# MusyX audio synthesis ucode (RSPRecomp'd from ROM 0x9ABE0 via musyx_rsp.toml).
+# Replaces the no-audio musyx_stub when ROGUESQ_AUDIO_UCODE=1. See
+# project_audio_state_2026_05_24.md.
+set(MUSYX_AUDIO_C   ${CMAKE_SOURCE_DIR}/build/factor5_ucode/musyx_audio_recompiled.c)
 # Post-process: RSPRecomp emits a goto to a non-existent label for one
 # never-taken branch near end-of-IMEM (perspective-divide reciprocal block).
 # tools/fixup_factor5_ucode.py rewrites those gotos to clean exits. The
@@ -219,19 +252,30 @@ if (Python3_Interpreter_FOUND AND EXISTS ${FACTOR5_BOOT_C})
         RESULT_VARIABLE FACTOR5_BOOT_FIXUP_RESULT
     )
 endif()
-set_source_files_properties(${FACTOR5_UCODE_C} ${FACTOR5_BOOT_C} PROPERTIES
+# Same unhandled-jump-goto fixup for the MusyX audio ucode.
+if (Python3_Interpreter_FOUND AND EXISTS ${MUSYX_AUDIO_C})
+    execute_process(
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/fixup_factor5_ucode.py ${MUSYX_AUDIO_C}
+        RESULT_VARIABLE MUSYX_AUDIO_FIXUP_RESULT
+    )
+endif()
+set_source_files_properties(${FACTOR5_UCODE_C} ${FACTOR5_BOOT_C} ${MUSYX_AUDIO_C} PROPERTIES
     LANGUAGE CXX
     COMPILE_OPTIONS "-msse4.1;/FI${CMAKE_SOURCE_DIR}/include/rsp_dpc_macros.h")
 
 add_executable(RogueSquadron64Recomp
     ${CMAKE_SOURCE_DIR}/src/main/main.cpp
+    ${CMAKE_SOURCE_DIR}/src/main/input_bindings.cpp
     ${CMAKE_SOURCE_DIR}/src/main/rt64_render_context.cpp
     ${CMAKE_SOURCE_DIR}/src/main/register_overlays.cpp
     ${CMAKE_SOURCE_DIR}/src/main/upstream_compat.cpp
+    ${CMAKE_SOURCE_DIR}/src/main/hook_helpers.cpp
     ${CMAKE_SOURCE_DIR}/src/rsp/aspMain.cpp
     ${CMAKE_SOURCE_DIR}/src/rsp/dpc_bridge.cpp
+    ${CMAKE_SOURCE_DIR}/src/rsp/dpc_bridge_diag.cpp
     ${FACTOR5_BOOT_C}
     ${FACTOR5_UCODE_C}
+    ${MUSYX_AUDIO_C}
     $<$<PLATFORM_ID:Windows>:${CMAKE_SOURCE_DIR}/src/main/app.rc>
 )
 
@@ -304,8 +348,9 @@ else()
     target_link_libraries(RogueSquadron64Recomp PRIVATE SDL2::SDL2 ${CMAKE_DL_LIBS} Threads::Threads)
 endif()
 
-# PatchesLib must come BEFORE RecompiledFuncs so the linker takes its
-# overrides for any duplicated symbol names (Zelda's pattern).
+# PatchesLib is an OBJECT library: its objects go straight onto the exe link
+# line ahead of RecompiledFuncs (the .lib), so the patch definitions win any
+# duplicated symbol via /FORCE:MULTIPLE (object beats archive member).
 if (PATCHES_BUILD_OK)
     target_link_libraries(RogueSquadron64Recomp PRIVATE PatchesLib)
 endif()

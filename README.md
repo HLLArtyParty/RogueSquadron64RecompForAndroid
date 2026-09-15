@@ -1,23 +1,17 @@
 <div align="center">
   <img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/main/favicon.ico">
-  
-   Icon created by [thedoctor45 on DeviantArt](https://www.deviantart.com/thedoctor45/art/Star-Wars-Rogue-Squadron-3D-Custom-Icon-535469296)
+
+  Icon by [thedoctor45 on DeviantArt](https://www.deviantart.com/thedoctor45/art/Star-Wars-Rogue-Squadron-3D-Custom-Icon-535469296)
 
 # Star Wars: Rogue Squadron 64 Recompiled
 
 </div>
 
-A naive static recomp of **Star Wars: Rogue Squadron** (N64, USA v1.0) built with the [N64Recomp](https://github.com/N64Recomp/N64Recomp) static recompilation toolchain and [N64ModernRuntime](https://github.com/N64Recomp/N64ModernRuntime).
+A static recompilation of **Star Wars: Rogue Squadron** (N64, USA v1.0) built with [N64Recomp](https://github.com/N64Recomp/N64Recomp) and [N64ModernRuntime](https://github.com/N64Recomp/N64ModernRuntime), rendering through a forked [RT64](https://github.com/MikeSemicolonD/rt64) that understands Factor 5's custom display-list format.
 
-> **Shelved by the original author.** 
+> **Work in progress, not yet playable end-to-end.** The port boots, renders the attribution text, plays the Factor 5 / N64-logo cinematic with textures and sound, and reaches the main menu on most runs. In-mission rendering has been seen in the attract-mode demo but is not stable. See [Status](#status) for details and [docs/game-architecture.md](docs/game-architecture.md) for the subsystem map.
 >
-> The repository is being kept open as a starting point for someone with more time and more experience in assembly programming.
->
-> **Heads-up on AI-assisted development.** Almost all the debugging, architectural decisions, and code in this repository — including the Factor 5 LLE/HLE bridge work, the runtime patches inside `lib/rt64` and `lib/N64ModernRuntime`, large parts of `src/main/main.cpp`, the `patches/` build pipeline, and most of the diagnostic env-var infrastructure — were produced with heavy AI assistance (Claude). Things to be aware of as a reader or contributor:
->
-> - Many choices are pragmatic workarounds (defensive KSEG0 guards, env-gated diagnostic toggles, dead-code logging scaffolding) rather than principled fixes. Some of these may not be necessary once the overlay-dispatch issue is addressed.
-> - Manual edits inside the `lib/rt64` and `lib/N64ModernRuntime` submodules, and inside generated files like `build/factor5_ucode/factor5_ucode_recompiled.c` and `RecompiledFuncs/`, are not committed to those upstream repos and can be clobbered on regeneration.
-> - The architectural conclusions (especially around overlay dispatch and Factor 5 GBI handling) appear well-supported by the code evidence but should not be treated as final without scrutiny. Issues, corrections, and second opinions are very welcome.
+> **Heavily AI-assisted.** Most of the debugging, architectural decisions, and code here (the F3DFACTOR5 GBI module, the runtime patches inside `lib/`, `src/main/`, the `patches/` pipeline, the diagnostic env vars) were produced with Claude. Many choices are pragmatic workarounds rather than principled fixes, and the architectural conclusions should be scrutinized rather than trusted. Issues, corrections, and second opinions are welcome.
 
 ---
 
@@ -28,25 +22,25 @@ To anyone in the future willing to take this on: **May the force be with you**
 ---
 
 <div align="center">
-	
-### [first-attempt](https://github.com/MikeSemicolonD/RogueSquadron64Recomp/tree/first-attempt)
-	
+
+### Screenshots
+
 <table>
   <tr>
-    <td>
-		<img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/main/screenshots/initial-screenshot.PNG">
-    </td>
-    <td>
-		<img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/main/screenshots/past-initial-screenshot.PNG">
-    </td>
+    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture1.PNG"></td>
+    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture2.PNG"></td>
   </tr>
   <tr>
-    <td>
-		<img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/main/screenshots/progress/past-initial-xwing.png">
-    </td>
-    <td>
-		<img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/main/screenshots/progress/past-initial-factor5-logo.png">
-    </td>
+    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture3.PNG"></td>
+    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture4.PNG"></td>
+  </tr>
+  <tr>
+    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture5.PNG"></td>
+    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture6.PNG"></td>
+  </tr>
+  <tr>
+    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture7.PNG"></td>
+    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture8.PNG"></td>
   </tr>
 </table>
 </div>
@@ -57,278 +51,181 @@ To anyone in the future willing to take this on: **May the force be with you**
 
 | Requirement | Notes |
 |---|---|
-| **ROM** | `rogue_squadron.z64` — USA v1.0 (16 MB, xxHash3-64: `0x6B66A44153594DEA`) |
-| **OS** | Windows 10+, Linux, or macOS 11+ |
-| **GPU** | D3D12 / Vulkan / Metal capable |
+| **ROM** | `rogue_squadron.z64`, USA v1.0 (16 MB, xxHash3-64 `0x6B66A44153594DEA`) |
+| **OS / GPU** | Windows 10+, Linux, or macOS 11+ with a D3D12, Vulkan, or Metal capable GPU |
 | **CMake** | 3.20+ |
-| **Compiler** | MSVC with ClangCL toolset (Windows), Clang/GCC (Linux/macOS) |
-| **N64Recomp output** | Pre-generated `RecompiledFuncs/` from the companion [rogue_squadron64](https://github.com/MikeSemicolonD/rogue_squadron64) decomp project (originally started by [Tmcg2](https://github.com/Tmcg2/rogue_squadron64))|
-| **MIPS cross-compiler** *(optional but strongly recommended)* | `mips64-elf-gcc` for the [`patches/` build](patches/README.md). Windows: download [`gcc-toolchain-mips64-win64.zip`](https://github.com/n64-tools/gcc-toolchain-mips64/releases). The official LLVM Windows installers ship without the MIPS backend, so clang doesn't work as a substitute. Default install path: `E:/mips-toolchain` (override with `cmake -DMIPS_TOOLCHAIN_DIR=...`). Skip-able: cmake will warn and disable the patches build if the toolchain isn't found, and the rest of the project still builds. |
-| **GNU make** | Used by `patches/Makefile`. `mingw32-make` from a MinGW install is fine. |
+| **Compiler** | MSVC with the ClangCL toolset (Windows), Clang or GCC (Linux/macOS) |
+| **N64Recomp output** | `RecompiledFuncs/`, generated locally from the companion [rogue_squadron64](https://github.com/MikeSemicolonD/rogue_squadron64) decomp (started by [Tmcg2](https://github.com/Tmcg2/rogue_squadron64)) via the `regen_funcs` target |
+| **MIPS cross-compiler** *(optional)* | `mips64-elf-gcc` for the [`patches/` build](patches/README.md). Windows builds are at [n64-tools](https://github.com/n64-tools/gcc-toolchain-mips64/releases); the official LLVM Windows installers lack the MIPS backend. Default path `E:/mips-toolchain` (override with `-DMIPS_TOOLCHAIN_DIR`). Without it CMake warns and skips the patches build. |
+| **GNU make** *(optional)* | For `patches/Makefile`. `mingw32-make` works. |
 
 ---
 
 ## Building
 
-### 1 : Clone with submodules
+### 1. Clone with submodules
 
 ```sh
 git clone --recurse-submodules https://github.com/MikeSemicolonD/RogueSquadron64Recomp.git
 cd RogueSquadron64Recomp
 ```
 
-The `lib/` directory contains:
-- [`lib/N64ModernRuntime`](https://github.com/MikeSemicolonD/N64ModernRuntime) — ultramodern + librecomp runtime
-- [`lib/rt64`](https://github.com/MikeSemicolonD/rt64) — RT64 N64-compatible renderer
+`lib/` holds forks of [N64ModernRuntime](https://github.com/MikeSemicolonD/N64ModernRuntime) and [rt64](https://github.com/MikeSemicolonD/rt64). They are forked because Factor 5's custom microcode needs changes stock upstream would not take.
 
-> The repos in `lib/` are forked to provide the maximum amount of developer freedom due to Factor5's custom byte code.
+### 2. Produce the decomp ELF
 
-### 2 : Generate the recompiled C output
-
-Before building this project you need the N64Recomp output. From the [rogue_squadron64](https://github.com/MikeSemicolonD/rogue_squadron64) decomp project:
+The recompiler needs the ELF from the companion [rogue_squadron64](https://github.com/MikeSemicolonD/rogue_squadron64) decomp (checked out next to this repo):
 
 ```sh
 # In the rogue_squadron64 repo:
 splat split roguesquadron.yaml
 python tools/make_elf.py
-# Then in the N64Recomp repo:
-N64Recomp rogue_squadron.toml
 ```
 
-The output goes to `../N64Recomp/RecompiledFuncs/` (relative to this repo).
+### 3. Configure, generate the recompiled C, and build
 
-### 3 : Configure and build
-
-**Windows (Visual Studio + ClangCL):**
 ```sh
+# Windows (Visual Studio + ClangCL). Debug is the tested configuration.
 cmake -B build -T ClangCL
-cmake --build build --config Debug    # for development (recommended while debugging)
-cmake --build build --config Release  # for performance
-```
+cmake --build build --config Debug --target regen_funcs   # generate RecompiledFuncs/ from your ROM
+cmake --build build --config Debug
 
-**Linux / macOS:**
-```sh
+# Linux / macOS
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --target regen_funcs
 cmake --build build
 ```
 
-The binary is written to `build/Debug/RogueSquadron64Recomp.exe` (Windows) or
-`build/RogueSquadron64Recomp` (Linux/macOS).
+`regen_funcs` runs the recompiler (built from the `lib/N64ModernRuntime/N64Recomp` submodule) on `rogue_squadron.toml`, producing the gitignored `RecompiledFuncs/`. Re-run it when `rogue_squadron.toml`, the symbols, or the decomp ELF change; the next build picks up the new sources automatically.
 
-#### Build options
+The binary is `build/Debug/RogueSquadron64Recomp.exe` (Windows) or `build/RogueSquadron64Recomp` (Linux/macOS). Host-side edits rebuild and link in well under a minute.
 
 | CMake option | Default | Purpose |
 |---|---|---|
-| `-DMIPS_TOOLCHAIN_DIR=path` | `E:/mips-toolchain` | Override the mips64-elf-gcc install path for `patches/`. |
-| `-DROGUESQ_DX12_DEBUG=ON` | OFF | Enable the D3D12 debug layer (use only with Debug builds). |
-| `-DROGUESQ_NO_ITER_DEBUG=ON` | OFF | Disable MSVC debug iterators in `lib/rt64` (defines `_HAS_ITERATOR_DEBUGGING=0 _ITERATOR_DEBUG_LEVEL=0`). Speeds up Debug runs that exercise lots of std::vector access in the renderer. |
+| `-DMIPS_TOOLCHAIN_DIR=path` | `E:/mips-toolchain` | Location of `mips64-elf-gcc` for `patches/` |
+| `-DROGUESQ_DX12_DEBUG=ON` | OFF | D3D12 debug layer (Debug builds only) |
+| `-DROGUESQ_NO_ITER_DEBUG=ON` | OFF | Disable MSVC debug iterators in `lib/rt64` for faster Debug runs |
 
-#### Incremental builds
+---
 
-When iterating on host-side code (`src/main/*`, `lib/rt64/src/gbi/rt64_gbi_f3dfactor5.cpp`), Debug builds typically rebuild + link in ~10–30s. Regenerating `RecompiledFuncs/` (step 2) is only required when the game's TOML changes — for day-to-day work, run only step 3.
+## The recompiler config (`rogue_squadron.toml`)
 
-#### Build pipeline summary
+`rogue_squadron.toml` is the N64Recomp config: it names the input ROM/ELF and defines the override layer applied during `regen_funcs`. Three directives shape the generated output without hand-editing it:
 
-1. `RecompiledFuncs/` (from N64Recomp) → game's MIPS recompiled to C
-2. `patches/` (optional MIPS GCC step) → `patches.elf` → recompiled-back → linked ahead of `RecompiledFuncs/` so override symbols win
-3. `lib/rt64` + `lib/N64ModernRuntime` → static-linked host runtime
-4. `src/main/*` → entry point wiring everything together
+| Directive | Effect |
+|---|---|
+| `stubs = [...]` | Replace a function body with an empty no-op (RSP blobs, cache-instruction leaves, splat fragments) |
+| `[[patches.instruction]]` | Overwrite one instruction at a `vram` with a raw `value` (e.g. NOP a `cache` op or a busy-wait branch) |
+| `[[patches.hook]]` | Inject C at a function's entry or before a `vram` — guards, pacing, logging. Host helpers live in `src/main/hook_helpers.cpp` |
+
+Edit the toml, then re-run `regen_funcs` to apply. For larger game-logic overrides, write MIPS-side C in the [`patches/`](patches/README.md) build instead — see Patching below.
 
 ---
 
 ## Running
 
-Place `rogue_squadron.z64` in the same directory as the executable, then launch it. The runtime verifies the ROM hash on startup.
+Put `rogue_squadron.z64` next to the executable and launch it. The ROM hash is checked at startup.
 
-```
-RogueSquadron64Recomp.exe
-```
+## Controls
 
----
+Keyboard, mouse, and gamepad all work; no controller is required. Defaults:
 
-## Controls (Gamepad)
+| N64 | Action | Keyboard | Gamepad |
+| --- | --- | --- | --- |
+| Analog stick | Steer / bank | WASD / arrows | Left stick |
+| A | Fire lasers | Space | A |
+| B | Drop bombs | Left Shift | X |
+| Z | Brake | Left Ctrl | Left trigger |
+| R | Boost | E | Right shoulder |
+| L | Targeting computer | Q | Left shoulder |
+| D-Pad | Throttle / trim | Numpad 8/4/2/6 | D-Pad |
+| C-Up / C-Down | Cycle views | I / K | Y / B |
+| C-Left / C-Right | Roll | J / L | Back / Guide |
+| Start | Pause | Enter | Start |
 
-| N64 | Action | Gamepad |
-|---|---|---|
-| Analog stick | Steer / bank | Left stick |
-| A | Fire lasers | A |
-| B | Drop bombs | X |
-| Z trigger | Brake / decelerate | Left analog trigger |
-| R | Boost / accelerate | Right shoulder |
-| L | Targeting computer | Left shoulder |
-| D-Pad | Throttle / trim | D-Pad |
-| C-Up / C-Down | Cycle views | Y / B |
-| C-Left / C-Right | Roll | Back / Guide |
-| Start | Pause | Start |
+**Mouse flight steering:** press the backtick key (`` ` ``) to toggle mouse
+capture — mouse motion then steers the craft, left/right click fire lasers /
+drop bombs. `Esc` releases capture.
 
----
+### Rebinding controls
 
-## Project Structure
+Press **F6** to open the **Controls** window. Click **Rebind** on any action and
+press the key, gamepad button, or mouse button to assign it; **Clear** removes a
+binding. Adjust mouse sensitivity and invert there, then **Save** (or **Restore
+defaults**). Bindings persist to `roguesq_input.json` next to the executable,
+which you can also hand-edit.
 
-```
-src/
-  main/main.cpp                — Entry point, SDL2 audio/input/window, RSP ucode dispatch
-  main/rt64_render_context.cpp — RT64 renderer integration
-  main/register_overlays.cpp   — Game function-table registration
-  rsp/dpc_bridge.cpp           — DPC_START/DPC_END bridge for Factor5 LLE → RT64
-  rsp/aspMain.cpp              — Audio RSP microcode stub (MusyX, silent)
-include/
-  recomp_game.h                — Forward declarations for runtime functions
-lib/
-  N64ModernRuntime/            — Runtime (ultramodern + librecomp)
-  rt64/                        — RT64 N64-compatible renderer
-factor5_rsp.toml               — RSPRecomp config for the Factor5 graphics ucode
-factor5_boot_rsp.toml          — RSPRecomp config for the Factor5 boot ucode
-factor5_boot_text.bin          — Boot-ucode text segment (input to RSPRecomp)
-```
-
-### Graphics path: Factor 5 LLE recompile
-
-Rogue Squadron uses Factor 5's custom GBI, which RT64's HLE pipeline cannot
-recognise. To work around that, the game's RSP graphics ucode is statically
-recompiled to C with [RSPRecomp](https://github.com/N64Recomp/N64Recomp) and
-runs as `factor5_ucode()` on the SP task thread. RDP commands the ucode emits
-via `mtc0` to `DPC_START` / `DPC_END` are forwarded to RT64's RDP interpreter
-through `src/rsp/dpc_bridge.cpp`, giving low-level (LLE) parity without
-requiring a custom HLE GBI profile.
-
-### Patching auto-generated functions: the `patches/` build
-
-Defensive guards and overrides for game functions live in [`patches/`](patches/),
-**not** as hand-edits to the auto-generated `RecompiledFuncs/funcs_*.c`. Hand-
-written C in `patches/*.c` is cross-compiled to MIPS, run back through
-N64Recomp, and linked ahead of the auto-generated output so its symbols win
-the duplicate-resolution at link time. Auto-generated source can therefore be
-regenerated cleanly without losing our work.
-
-The pattern follows
-[Zelda64Recompiled/patches](https://github.com/Zelda64Recomp/Zelda64Recomp/tree/dev/patches),
-**but uses `mips64-elf-gcc` instead of `clang -target mips`** — current
-official LLVM Windows builds (19, 20, and 22.x release candidates) ship
-without the MIPS backend, while Linux/Mac LLVM packages include it. We use
-the [n64-tools](https://github.com/n64-tools/gcc-toolchain-mips64/releases)
-prebuilt MIPS GCC for Windows. See [patches/README.md](patches/README.md) for:
-
-- Toolchain install steps and verification
-- The full pipeline (`mips64-elf-gcc` → ELF → N64Recomp → host C → link)
-- How to write an override + the syms.ld pattern
-- Flag-by-flag differences from Zelda's clang-based Makefile (we drop the
-  clang-only flags `-target mips`, `-mno-odd-spreg`, `-mno-check-zero-division`,
-  `-Wno-incompatible-library-redeclaration`, `-Wno-unsupported-floating-point-opt`)
-- Constraints (`-nostdinc` means no `stddef.h` / `stdint.h` — inline the
-  typedefs you need)
+> In Debug builds (developer mode on by default) the RT64 inspector owns the
+> ImGui overlay, so press **F1** once before **F6**. Release builds open the
+> Controls window with **F6** directly.
 
 ---
 
-## Status
+## Architecture
 
-| System | Status |
+Recompiled game code (`RecompiledFuncs/`, generated) and hand-written overrides (`patches/`, linked first so their symbols win) compile into one static library, linked against forked builds of N64ModernRuntime (the libultra/runtime host) and RT64 (the renderer). `src/main/` wires it together.
+
+| Path | Role |
 |---|---|
-| Boot sequence | Reaches the attribution screen, advances to the N64 logo phase, no crash |
-| Attribution screen | **Visible only as a coloured clear** (default black with the canonical `0x00010001` fill, or bright green if `ROGUESQ_HLE_OP02_EXPERIMENTAL=1` is set as a visibility marker). The actual "STAR WARS: ROGUE SQUADRON / LucasArts / Factor 5" text is **not rendered** — see [Where it actually stops](#where-it-actually-stops) |
-| N64 logo | Phase is reached without crashing, but no logo content renders (white screen) |
-| Cinematic | Not reached in a useful state — depends on N64 logo phase completing visibly |
-| Main menu | Not reached |
-| Video pipeline (host side) | RT64 + custom F3DFACTOR5 GBI module dispatching cleanly. SDL window, swapchain, ImGui inspector (F1), VI presentation timing all working. The pixels-from-RDRAM-to-screen path is intact — verified via `ROGUESQ_LOG_VI_FB_CONTENT=1` which shows whatever the game writes to RDRAM does reach the swapchain |
-| Input | Working (SDL2 gamepad). Keyboard support not implemented |
-| Save data | EEPROM 4K via librecomp |
-| Audio | Stubbed — silent. Per [rerogue](https://github.com/jrra/rerogue) the codec is **MORT**, not MusyX as previously assumed; needs a separate RSPRecomp pass for either codec |
-| Memory pak | Stubbed — returns no-pak |
+| `src/main/main.cpp` | Entry point — SDL2 window/audio/input, RSP task dispatch |
+| `src/main/rt64_render_context.cpp` | RT64 integration — `send_dl`, VI registers, framebuffer sanitizer |
+| `src/main/register_overlays.cpp` | Boot-time overlay function-table registration |
+| `src/main/upstream_compat.cpp` | libultra shims, overlay loader, HMT-load capture |
+| `lib/rt64/src/gbi/rt64_gbi_f3dfactor5.cpp` | The Factor 5 GBI module (the render core) |
+| `patches/` | Game-function overrides, cross-compiled to MIPS |
+| `src/rsp/`, `*_rsp.toml` | RSPRecomp configs and DPC bridge for the opt-in LLE path |
 
-### Where it actually stops
+**Graphics.** Rogue Squadron uses Factor 5's own display-list format, which stock RT64 cannot parse; the forked RT64 carries a GBI module for it. `M_GFXTASK` goes straight to RT64's HLE processor, which emits native RT64 geometry. The grammar is in [docs/f5-model-dl-spec.md](docs/f5-model-dl-spec.md) and validated offline against Project64 dumps with `tools/validate/f5_dl_walk.py`. The original LLE path (RSP ucode via RSPRecomp, RDP bytes through `dpc_bridge.cpp`) is kept behind `ROGUESQ_LLE_FORCE=1`.
 
-The attribution screen and N64 logo both fail to render their actual content because the game's CPU code never produces any pixel data beyond the canonical-black framebuffer clear. `ROGUESQ_LOG_VI_FB_CONTENT=1` traces confirm this directly: during the attribution-display loop the VI framebuffer at `0x806BA000` has every single pixel (71680 of 71680) set to `0x0001` (canonical N64 black with alpha=1). No text bytes, no glyphs, no draw commands. The host renderer is faithfully showing what's in RDRAM — and what's in RDRAM is just a clear.
+**Frame pacing.** By default the game's own VI / SP / DP message protocol runs as on hardware, with SP-done delivered after RT64 parses the list. `--no-vi-driven-loop` (`ROGUESQ_VI_DRIVEN_LOOP=0`) restores the older host-paced loop.
 
-The **root cause** appears to be an overlay-dispatch issue rather than a rendering issue:
+**Audio.** MusyX drives SFX and music; samples stream from the cartridge via PI DMA as on hardware.
 
-1. The game ships three overlays that all load at VA `0x800A5130`: `.ovl.mission` (ROM 0xA5D30), `.ovl.menu` (ROM 0x10C2D0), `.ovl.cinematic` (ROM 0x137580). At runtime they swap in and out as the game progresses.
-2. N64Recomp's output (`RecompiledFuncs/recomp_overlays.inl`) **does** generate separate function arrays for all three overlays (`section_4_ovl_mission_funcs`, `section_5_ovl_menu_funcs`, `section_6_ovl_cinematic_funcs`).
-3. **But** librecomp's `load_overlays(0x1000, entrypoint, 1024*1024)` boot-time registration call covers only the first 1 MB of ROM. That's enough to register `.ovl.mission` (rom 0xA5D30, in range), but `.ovl.menu` (rom 0x10C2D0) and `.ovl.cinematic` (rom 0x137580) are past the cutoff and never register their functions into `func_map`.
-4. So when the game calls `loadOverlay(1)` to bring the menu overlay into RAM, the bytes DMA in correctly, but the recompiled-C side keeps calling whichever overlay's version of each function was bound at link time (mission). The menu overlay's distinct code — including the function that draws the attribution text — never executes.
-
-A prior commit (`e532b90`, "Add logging, frame-rate hooks, and overlay guard") fixed this by adding a `load_overlays(...)` call inside `lib/N64ModernRuntime/librecomp/src/pi.cpp:do_dma` so each ROM→RDRAM transfer re-registered any overlay it brought in. A later cleanup reverted that change. Restoring it is the architectural fix; an attempt to shadow `osPiStartDma_recomp` in `src/main/upstream_compat.cpp` instead (to avoid modifying the submodule) regressed boot because the replacement didn't cover the SRAM-read path that `do_dma` also handles.
-
-The minimal correct fix is to re-add the post-DMA `load_overlays` call to `lib/N64ModernRuntime/librecomp/src/pi.cpp`. If that path is undesirable because the file lives under `lib/`, a more involved alternative is a complete SRAM-aware shadow of both `osPiStartDma_recomp` and `osEPiStartDma_recomp` in `src/main/upstream_compat.cpp` that replicates the full `do_dma` behaviour and layers `load_overlays` on top. Either way, the next visible content to appear would be whatever the menu overlay actually draws when its real code runs.
-
-### Other known issues
-
-- **Audio**: stubbed entirely. Per [rerogue](https://github.com/jrra/rerogue) PC-version reversing, the codec is **MORT**, not MusyX. Either codec needs an RSPRecomp pass against the audio ucode segment in the ROM. No starting work has been done.
-- **Defensive KSEG0 guards in `RecompiledFuncs/funcs_*.c`**: many functions have hand-instrumented pointer-validity guards to survive wild-pointer dereferences. Most of these were added while chasing downstream symptoms of the overlay-dispatch issue and may not be needed once the overlays dispatch correctly. Leave them for now — strip them only after the overlay fix is verified.
-- **`func_80022048` stub** and the **SEH wrap of the recompiled thread entry** in `lib/N64ModernRuntime/librecomp/src/recomp.cpp` are similarly downstream-symptom guards that should be revisited after the overlay fix.
+**Patching.** Overrides live in [`patches/`](patches/) and as `[[patches.hook]]` entries in `rogue_squadron.toml`, never as hand edits to the generated `RecompiledFuncs/`, so regeneration is safe. The pattern follows [Zelda64Recomp](https://github.com/Zelda64Recomp/Zelda64Recomp/tree/dev/patches) but uses `mips64-elf-gcc` instead of clang. See [patches/README.md](patches/README.md).
 
 ---
 
-## Contributing / Debugging
+## Debugging
 
-If you want to investigate a crash or behavior bug, see
-[docs/debugging-with-visual-studio.md](docs/debugging-with-visual-studio.md)
-for how to attach Visual Studio to the recompiled output, set conditional
-breakpoints inside `funcs_*.c`, walk back through a bad register value,
-and tell a recompile bug apart from a game-logic bug.
+[docs/debugging-with-visual-studio.md](docs/debugging-with-visual-studio.md) covers attaching Visual Studio to the recompiled output and telling a recompile bug from a game-logic bug. Helpers under [tools/](tools/):
 
-For hangs or post-mortem analysis there's a helper toolkit under
-[tools/](tools/):
+- `dump-game.ps1` writes a full-memory minidump of a running instance, even when the window is unresponsive. F12 in-game does the same.
+- `inspect-dump.py` and `dump_stackscan.py` list and symbolize threads from a minidump.
+- `run-stability.ps1` launches N timed runs and classifies each by stderr markers.
+- `validate/` captures Project64 goldens, diffs RDRAM, compares message-order traces, and walks display lists offline.
 
-- `tools/dump-game.ps1` — captures a full-memory minidump of a running
-  `RogueSquadron64Recomp.exe` even when the GUI is unresponsive. Uses
-  the kernel `MiniDumpWriteDump` API so it doesn't depend on the
-  target's SDL message pump.
-- `tools/inspect-dump.py` — pip `minidump` reader. Lists every thread
-  in the dump and tags it `in_exe` (running our recompile),
-  `kernel_wait` (parked in ntdll), or other-module. The two or three
-  `in_exe` threads are usually the only ones worth opening in VS.
-- `tools/run-stability.ps1` — N-run harness. Launches the binary
-  `-Runs N` times with `-Timeout` seconds each, captures per-run
-  stderr to `logs/stability/<tag>/run_N.log`, and classifies outcomes
-  by grepping markers (`[CRASH]`, `[ABORT]`, `[L_627C-FIRST]`,
-  `[cine-tick]`, `[guard]`). Prints a summary table + CSV. Use
-  `-EnvVars "FOO=1;BAR=2"` to forward debug-trace env vars.
-- `tools/measure-leak.ps1` — single-run harness that polls Working
-  Set / Private Bytes / Virtual Memory once per second and writes
-  `memory.csv`. Useful when correlating per-second memory growth with
-  stderr trace timestamps.
+A watchdog thread writes `mqdiag_NNN.txt` message-queue snapshots every 3 seconds.
 
-The runtime writes `mqdiag_NNN.txt` snapshots every 3 seconds via a
-watchdog thread (`start_mqdiag_watchdog` in
-[src/main/main.cpp](src/main/main.cpp)). Useful for finding queues
-with backed-up events or threads stuck on a missing message. F12
-inside the game window writes an ad-hoc minidump.
+### Command-line options
 
-Most diagnostic logs are gated behind `ROGUESQ_LOG_*` env vars (see
-[docs/debug-trace-env-vars.md](docs/debug-trace-env-vars.md) — read
-before adding new `fprintf` or asking which trace to enable). Notable:
+Run `RogueSquadron64Recomp.exe --help` for the full list. The common options:
 
-| Env var | What it enables |
+| Option | Effect |
 |---|---|
-| `ROGUESQ_LOG_ALL` | Master switch — turns on everything |
-| `ROGUESQ_LOG_GBI` | Per-handler logs in the F3DFACTOR5 GBI (texrect / setCombine / setOtherMode / setScissor / setCIMG accepts + rejects). High volume — locks the ImGui inspector after a few seconds if left on |
-| `ROGUESQ_LOG_CIMG` | Per-fb setCIMG + per-fb texrect frequency counters. Bounded output, useful for correlating render targets with VI's sampled fb |
-| `ROGUESQ_LOG_CINE_CP` | Per-call-site checkpoints inside `func_800A5D80`'s cinematic loop body. Pair with `ROGUESQ_LOG_CINE_CP_FROM=N` to start verbose logging at iter N |
-| `ROGUESQ_LOG_RT64_ALLOC` | RT64 allocation hotspots (interpolatedColorTargets, nativeSwappedRAM, rdramData, BufferPair, RenderTarget) — use to find allocation spikes |
-| `ROGUESQ_HLE_DEV_MODE` | Default ON. Set to `0` to disable RT64's ImGui developer overlay (F1 inspector) |
-| `ROGUESQ_HLE_AUTO_FULLSYNC` | Default OFF. Set to `1` to force an extra `state->fullSync()` after every `processDisplayLists`. Factor 5 already emits its own G_RDPFULLSYNC, so this usually overwrites the committed workload with an empty one — only useful as a diagnostic toggle |
-| `ROGUESQ_HLE_PRESENT_EARLY` | Default OFF. Set to `1` to switch RT64 into `PresentEarly` presentation mode (Zelda64Recomp's default). Causes instability with our Factor 5 flow — keep off unless investigating |
-| `ROGUESQ_HLE_NO_AA` | Default OFF. When set, strips `AA_EN` (bit 14) from any setOtherModeL write that covers it. Use to test whether anti-aliasing + zero combiner alpha is suppressing pixels |
-| `ROGUESQ_HLE_NO_CVGA` | Default OFF. Strips `CVG_X_ALPHA` (bit 23) and `ALPHA_CVG_SEL` (bit 24) from otherModeL writes. Same diagnostic class as `NO_AA` but targets the coverage-from-alpha path |
-| `ROGUESQ_HLE_FORCE_OPAQUE` | Default OFF. Strips AA_EN + CVG_X_ALPHA + ALPHA_CVG_SEL all at once. Broadest "make pixels visible regardless of combiner alpha" sledgehammer |
-| `ROGUESQ_HLE_FORCE_VISIBLE` | Default OFF. Replaces every Factor 5 setCombine + setFillColor with a known-rendering "solid magenta" setup. If magenta appears on screen, the GPU pipeline works and the bug is purely combiner-mux-specific |
-| `ROGUESQ_GFX_API` | Force a specific graphics API. Values: `vulkan` or `d3d12`. Default is `auto` (D3D12 on Windows) |
-| `ROGUESQ_SUPPRESS_OOB_CIMG` | **Default OFF.** When set, drops Factor 5 ucode emissions of bogus SET_COLOR_IMAGE commands at HIGH (≥ 0x800000) and LOW (< 0x100000) addresses before they reach RT64. Reduces the iter-810 memory spike but causes a visual regression — the 3D Factor 5 logo no longer renders, since some legitimate Factor 5 lowmem CIMGs are dropped along with the garbage |
-| `ROGUESQ_HWBP` + `ROGUESQ_HWBP_ADDR` | Win32 DR0 hardware breakpoint on a configurable RDRAM address |
+| `--gfx-api <vulkan\|d3d12>` | Force the graphics API (default auto) |
+| `--[no-]hle-dev-mode` | RT64 ImGui inspector on F1 (default on in Debug, off in Release) |
+| `--no-vi-driven-loop` | Old host-paced frame loop instead of the hardware protocol (default is VI-driven) |
+| `--no-f5-native` | Parse F5 display lists without emitting geometry |
+| `--no-audio-ucode` | Silent audio stub instead of the MusyX synth |
+| `-m` / `--mute`, `--audio-gain <f>` | Silence output, or scale master gain |
+| `--audio-latency-ms <n>` | Audio buffer latency in milliseconds |
+| `--dump-pcm <path>` | Write the synth output to a 22050 Hz stereo WAV |
+| `--render-song <key>` | Force a specific song (0 = the N64-logo music) |
+| `--fake-controller`, `--auto-start <ms>` | Headless runs: fake a controller, pulse START |
+| `--set NAME=VALUE` | Set any `ROGUESQ_*` variable directly |
 
-### RT64 developer overlay (F1)
+Each option maps to a `ROGUESQ_*` environment variable, which still works (a bare `NAME=VALUE` argument does too). The full debug/trace/experiment catalog — logging categories, DL/texture dumps, message-order traces, and rendering A/B toggles — lives in [docs/debug-trace-env-vars.md](docs/debug-trace-env-vars.md); reach any of those from the command line with `--set NAME=VALUE`.
 
-With `ROGUESQ_HLE_DEV_MODE` enabled (default), pressing **F1** in the window toggles RT64's ImGui inspector:
-
-- **Configuration** — resolution / aspect / antialiasing / framebuffer settings.
-- **Textures** — load texture packs; **Start dumping textures** writes every TMEM load + palette to a directory of your choice (useful for confirming TMEM populates correctly).
-- **Debugger** — pause/resume (F4), Frame stats, per-fbPair → per-rectangle → per-Call inspector with vertex/pixel shader dump buttons.
-- **Render** — render-target visualization.
-
-Other developer hotkeys: **F2** ray tracing toggle (not yet public), **F3** ViewRDRAM mode, **F4** texture replacement toggle.
+With the inspector enabled, F1 toggles RT64's ImGui overlay (configuration, texture dumping, per-call debugger, render-target view). F3 toggles ViewRDRAM mode and F4 toggles texture replacement, or pauses the debugger while an inspector window is focused.
 
 ---
+
+## Acknowledgements
+
+- **Dávid Pethes**: the [rerogue](https://github.com/dpethes/rerogue) tools and the [satd.sk write-up](https://satd.sk/pages/rs/) document the PC build's HOB, HMT, HMP, and MORT formats, which the N64 build shares. They directly inform the texture and model pipeline here.
+- **[jrra](https://github.com/jrra/rerogue)**: a community fork of rerogue.
+- **[Tmcg2](https://github.com/Tmcg2/rogue_squadron64)**: started the companion decomp project.
 
 ## License
 
-See [LICENSE](LICENSE). This project contains no ROM data and requires a legally-obtained copy of the game.
+See [LICENSE](LICENSE). This project contains no ROM data and requires a legally obtained copy of the game.
