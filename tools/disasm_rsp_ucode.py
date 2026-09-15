@@ -26,6 +26,18 @@ ROOT = r"E:/Projects/RogueSquadron64Recomp"
 IMEM = os.path.join(ROOT, "dumps", "f5_ucode.imem.bin")
 DMEM = os.path.join(ROOT, "dumps", "f5_ucode.dmem.bin")
 
+# Re-extract from a hardware golden if the dumps are missing: the gfx ucode text lives at RDRAM
+# 0x80024A10 (8 KB, resident IMEM + overlay images) and its data at 0x80038D00 (4 KB). Validated by
+# the dispatch tables at DMEM 0xD6/0x64 reproducing the known handler offsets.
+if not (os.path.exists(IMEM) and os.path.exists(DMEM)):
+    src = os.path.join(ROOT, "dumps", "pj64", "rdram_la_gf440.bin")
+    if not os.path.exists(src):
+        raise SystemExit("missing %s and no golden at %s to re-extract from" % (IMEM, src))
+    _d = open(src, "rb").read()
+    open(IMEM, "wb").write(_d[0x24A10:0x24A10 + 0x2000])
+    open(DMEM, "wb").write(_d[0x38D00:0x38D00 + 0x1000])
+    print("re-extracted %s + %s from %s" % (IMEM, DMEM, src))
+
 with open(IMEM, "rb") as f:
     imem = f.read()
 with open(DMEM, "rb") as f:

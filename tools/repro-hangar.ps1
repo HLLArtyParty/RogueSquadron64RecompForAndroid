@@ -46,7 +46,8 @@ public class SI2 {
   public static IntPtr Focus(string t){ IntPtr h=FindWindow(null,t); if(h!=IntPtr.Zero){ ShowWindow(h,9); SetForegroundWindow(h);} return h; }
 }
 "@
-$ENTER=0x1C; $SPACE=0x39
+# Default keys: Esc = Start, Enter = A.
+$START=0x01; $A=0x1C
 function Tap($scan,$hold=90){ [SI2]::Key([uint16]$scan,$false); Start-Sleep -Milliseconds $hold; [SI2]::Key([uint16]$scan,$true) }
 
 $h = [SI2]::Focus($Title)
@@ -54,16 +55,16 @@ if ($h -eq [IntPtr]::Zero) { Write-Output "WINDOW NOT FOUND"; exit 1 }
 Start-Sleep -Milliseconds 200
 
 # Skip the intro cinematic to the title/save-select. Several spaced Starts.
-1..4 | ForEach-Object { Tap $ENTER; Start-Sleep -Milliseconds 1600 }
+1..4 | ForEach-Object { Tap $START; Start-Sleep -Milliseconds 1600 }
 Start-Sleep -Milliseconds 500
 # SELECT GAME -> ENTER NAME -> type 2 letters -> confirm name
-Tap $SPACE; Start-Sleep -Milliseconds 1600   # pick empty slot
-Tap $SPACE; Start-Sleep -Milliseconds 700    # letter
-Tap $SPACE; Start-Sleep -Milliseconds 700    # letter
-Tap $ENTER; Start-Sleep -Milliseconds 2000   # finish name -> ARE YOU SURE
-Tap $SPACE; Start-Sleep -Milliseconds 2000   # YES -> SELECT LEVEL
-Tap $SPACE; Start-Sleep -Milliseconds 1700   # pick level -> AVAILABLE CRAFT
-Tap $SPACE; Start-Sleep -Milliseconds 600   # select craft
-Tap $SPACE; Start-Sleep -Milliseconds 600   # confirm mission -> hangar (black)
-Tap $SPACE;                                 # one more for good luck
+Tap $A; Start-Sleep -Milliseconds 1600       # pick empty slot
+Tap $A; Start-Sleep -Milliseconds 700        # letter
+Tap $A; Start-Sleep -Milliseconds 700        # letter
+Tap $START; Start-Sleep -Milliseconds 2000   # finish name -> ARE YOU SURE
+Tap $A; Start-Sleep -Milliseconds 2000       # YES -> SELECT LEVEL
+Tap $A; Start-Sleep -Milliseconds 1700       # pick level -> AVAILABLE CRAFT
+Tap $A; Start-Sleep -Milliseconds 600        # select craft
+Tap $A; Start-Sleep -Milliseconds 600        # confirm mission -> hangar
+Tap $A;                                      # one more for good luck
 Write-Output "sequence complete, log=$log"

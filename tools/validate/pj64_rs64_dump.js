@@ -31,8 +31,24 @@ events.onexec(0x800AA658, function () {                 // tickCutsceneActionSlo
 });
 var laOn = false, laGf = 0;
 events.onexec(0x80000B20, function () { console.log("[rs64_dump] loadOverlay a0=" + cpu.gpr.a0); if (cpu.gpr.a0 == 2 && !laOn) { laOn = true; laGf = 0; } });
-// LucasArts flyover goldens: every 30th submitGfxFrame after the cinematic overlay first loads.
-events.onexec(0x8000C07C, function () { if (!laOn) return; laGf++; if (laGf >= 420 && laGf <= 560 && laGf % 20 == 0) dump("la_gf" + laGf); });
+// Graphics-frame counter after the cinematic overlay first loads (la_gf goldens use it).
+// Effect burst: the first randomlyScaledColoredEffectNpcHandler call past the LucasArts flyover arms a
+// dump of every graphics frame for FX_BURST frames (particles live a fraction of a second).
+var FX_AFTER_GF = 600, FX_BURST = 36, fxArmed = -1, fxSeen = {};
+function fxHit(name) {
+    if (!laOn) return;
+    if (!fxSeen[name]) { fxSeen[name] = true; console.log("[rs64_dump] first " + name + " at gf " + laGf); }
+    if (fxArmed < 0 && laGf > FX_AFTER_GF) { fxArmed = laGf; console.log("[rs64_dump] fx burst armed by " + name + " at gf " + laGf); }
+}
+events.onexec(0x80060900, function () { fxHit("coloredEffect"); });
+events.onexec(0x80060690, function () { fxHit("plainEffect"); });
+events.onexec(0x8007413C, function () { fxHit("explosionCtl"); });
+events.onexec(0x8000C07C, function () {
+    if (!laOn) return;
+    laGf++;
+    if (laGf % 200 == 0) console.log("[rs64_dump] gf " + laGf);
+    if (laGf >= 840 && laGf <= 1120 && laGf % 4 == 0) dump("fx_gf" + laGf);
+});
 // Sky/horizon handler DRAW branch (cinematicSplineWalkerNpcHandler a1==4, 0x8005C378). Mirrors the
 // recomp probe: dump a golden at draw #200 (Tatooine demo, ~77s) so we can compare hardware's sky
 // modelview (0x80700040) against ours. See plans/skybox-not-rendering-plan.md.
