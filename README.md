@@ -9,15 +9,8 @@
 
 A static recompilation of **Star Wars: Rogue Squadron** (N64, USA v1.0) built with [N64Recomp](https://github.com/N64Recomp/N64Recomp) and [N64ModernRuntime](https://github.com/N64Recomp/N64ModernRuntime), rendering through a forked [RT64](https://github.com/MikeSemicolonD/rt64) that understands Factor 5's custom display-list format.
 
-> **Work in progress, not yet playable end-to-end.** The port boots, renders the attribution text, plays the Factor 5 / N64-logo cinematic with textures and sound, and reaches the main menu on most runs. In-mission rendering has been seen in the attract-mode demo but is not stable. See [Status](#status) for details and [docs/game-architecture.md](docs/game-architecture.md) for the subsystem map.
->
-> **Heavily AI-assisted.** Most of the debugging, architectural decisions, and code here (the F3DFACTOR5 GBI module, the runtime patches inside `lib/`, `src/main/`, the `patches/` pipeline, the diagnostic env vars) were produced with Claude. Many choices are pragmatic workarounds rather than principled fixes, and the architectural conclusions should be scrutinized rather than trusted. Issues, corrections, and second opinions are welcome.
-
----
-
-'*first-attempt*' branch **is** the farthest I have gotten. Second attempt was a more higher level focus but ended up slowly drifting back to what first attempt was which is mostly LLE focused. I tried to go away from that because debugging and printing data from assembly gets very hairy. Since my experience with assembly is limited to just my comp. architecture class, I feel like I've done all that I can. Hopefully this project can be used as a good jumping off point for the whole recomp project. 
-
-To anyone in the future willing to take this on: **May the force be with you**
+> **Work in progress and Heavily AI-assisted.**
+> Most of the debugging, architectural decisions, and code here (the F3DFACTOR5 GBI module, the runtime patches inside `lib/`, `src/main/`, the `patches/` pipeline, the diagnostic env vars) were produced with Claude.
 
 ---
 
