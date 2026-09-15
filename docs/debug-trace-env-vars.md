@@ -48,6 +48,8 @@ Everything below is debug/diagnostic and stays variable-only.
 | `ROGUESQ_LOG_RDP_STATE` | off | `[trace] setCombine #N mux=...`, `[trace] setOtherMode #N cycleType=...`, `[texfilt] tf=...`, `[particle-mux] otherMode...` | RDP-state diagnosis — which combiner/cycleType is active when a specific draw fires. Useful when correlating "what mux runs at frame X" or "did texfilt change between expected and actual". |
 | `ROGUESQ_LOG_PRESENT` | off | `[trace] RT64::Present #N swapIdx=...`, `[trace] PresentQueue::frame #N`, `[trace] Present::lookup`, `[trace] PresentQ::regfb/scratch`, `[trace] fbReg`, `[vi-status] word=...` | VI presentation / framebuffer routing investigations. The buffer-arbiter bug was diagnosed via these traces. Fires ~60 lines/sec. |
 | `ROGUESQ_LOG_SP_TASKS` | off | `[sp] osSpTaskStartGo #N kind=GFX...` | Task-scheduling rate (cinematic ~30/s, normal play 1-2/frame). Useful when tracking how often the game submits GFX tasks to the RSP. |
+| `ROGUESQ_LOG_VI` | off | `[osViSetMode #N ...]`, `[osViSwapBuffer #N fb=...]`, `[osViSetXScale/YScale]`, `[osViBlack]` | The game's VI mode and swap calls as they reach the libultra shims. |
+| `ROGUESQ_LOG_THREADS` | off | `[osDestroyThread] t=... queue=... qok=... chain_ok=...` | Thread teardown with the queue-chain check. A failed check is always printed. |
 | `ROGUESQ_LOG_PIPELINE` | off | `[pipe-1]`, `[pipe-2]`, `[pipe-3]` stage counters in RT64 framebuffer renderer | Per-stage TEXRECT pipeline counters (push → GPU draw). Used to verify the pipeline isn't dropping cinematic content between submission and rasterization. |
 | `ROGUESQ_LOG_GBI` | off | per-handler GBI command logs | Every Factor 5 GBI handler as it fires. **Very high volume.** Use when auditing which opcodes run in a phase. |
 | `ROGUESQ_LOG_GFX_TASK` | off | one line per graphics task | Low-volume task-submission trace; pair with queue diagnostics. |
@@ -73,7 +75,6 @@ they're orthogonal to the log gates above but commonly co-used.
 | `ROGUESQ_FB_GUARDS` | on | Host framebuffer-window guards. Set `0` to disable for A/B comparison against hardware goldens. |
 | `ROGUESQ_F5_CHUNK_BOUND` | on | Factor 5 DL chunk-bounded fetch grammar rule. Set `0` to disable when diagnosing a DL desync. |
 | `ROGUESQ_F5_NON` | off | Force `NoN` (No-Near-clipping) for the Factor 5 ucode: `1` disables the GPU hard near-plane clip and uses the far-plane manual clamp instead. F5 uniquely ships `NoN=false`, so `depthClipEnabled=true` discards large geometry as it approaches the camera (objects "culled / lower-detail up close"). A/B fix for that symptom; matches every other `.NoN` ucode. Applied in `RSP::setGBI` (`lib/rt64/src/hle/rt64_rsp.cpp`). |
-| `ROGUESQ_F5_INTERP` | off | Give each Factor 5 object a stable per-object identity for RT64's 60 fps frame interpolation. F5 never stamps a matrix group, so every object defaults to `G_EX_ID_AUTO` and RT64 greedily geometry-matches similar moving ships across frames → mismatched-pair **smearing/trails** (worst on fast/close objects — the "worse up close" symptom). `1` stamps each per-object modelview (`op_01_matrix`) with a distinct `G_EX_ORDER_LINEAR` id + pos/rot/scale interpolation, resetting the draw-order counter on each projection load. Applied in `lib/rt64/src/gbi/rt64_gbi_f3dfactor5.cpp`. |
 | `ROGUESQ_LLE_FORCE` | off | Route `M_GFXTASK` through the recompiled RSP ucode + `dpc_bridge.cpp` instead of RT64 HLE. Diagnostic only — semi-broken (cinematic tasks hit an unhandled jump). Companions `ROGUESQ_LLE_UNGATED` (skip the attribution-page gate) and `ROGUESQ_LLE_SOLO` (skip the HLE fallthrough). |
 
 ### Boot / attract-demo navigation
@@ -104,6 +105,7 @@ unless set.
 | `ROGUESQ_ASPECT` | (unset) | Force a specific aspect ratio as a decimal `w/h` (e.g. `1.7777`); sets `aspectRatio=Manual`. Takes precedence over `ROGUESQ_WIDESCREEN`. |
 | `ROGUESQ_HDR` | off | `1` → `internalColorFormat=High` (higher-precision internal color target). |
 | `ROGUESQ_TEX_FILTER` | `aa` | Texture filtering: `nearest` / `linear` / `aa` (AntiAliasedPixelScaling). |
+| `ROGUESQ_RT_INTERP` | off | Enable RT64 frame interpolation to `<hz>` (default 60): `refreshRate=Manual`, `refreshRateTarget=hz`. Gives smooth 60fps motion via RT64's built-in AUTO geometric matcher (validated on the Factor 5 path: smooth, nearly flicker-free) with no per-object id stamping needed. Off by default (`refreshRate=Original` = no interpolation). |
 | `ROGUESQ_TEXTURE_PACK` | (unset) | Load an RT64 texture-replacement pack (a directory or `.zip` containing `rt64.json` + DDS/PNG) and enable replacements. F5 loads textures through the normal RDP TMEM path so RT64's content hashes are stable — packs resolve exactly as for a stock-ucode game. Applied after `app->setup()` via `textureCache->loadReplacementDirectories`. Authoring a pack uses RT64's developer dump workflow (see Zelda64Recomp's texture-pack tooling); the loader here is the runtime consumer. |
 
 ## How to add a new debug trace

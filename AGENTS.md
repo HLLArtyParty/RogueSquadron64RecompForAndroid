@@ -7,8 +7,9 @@ Guidance for AI agents working on the Rogue Squadron 64 Recompiled project — a
 ```
 src/main/main.cpp                       Game registration + RSP/audio/input/gfx callbacks
 src/main/register_overlays.cpp          Boot-time overlay registration (all 3 .ovl.* at once)
-src/main/rt64_render_context.cpp        RT64 host context; voice-unstick watchdog
-src/main/upstream_compat.cpp            Host shims (DMA, VI-driven loop plumbing)
+src/main/rt64_render_context.cpp        RT64 host context; HLE send_dl, present-side fixes, boot-target driver
+src/main/upstream_compat.cpp            libultra shims and scheduler overrides
+src/main/hook_helpers.cpp               Host entry points for rogue_squadron.toml hooks (watchdog, pacing, matpool, DL walkers)
 src/rsp/dpc_bridge.cpp                  DPC_START/DPC_END bridge into RT64
 src/rsp/dpc_bridge_diag.cpp             DL stream tracing/diagnostics
 src/rsp/aspMain.cpp                     Audio RSP microcode stub
@@ -22,7 +23,7 @@ tools/                                  PowerShell + Python diagnostic and valid
 build/                                  CMake out-of-source build dir
 ```
 
-The recompiled MIPS code lives **outside** the project at `E:\Projects\N64Recomp\RecompiledFuncs\` — `funcs_*.c` plus `funcs.h` and `recomp_overlays.inl`. These are auto-generated; hand-instrumenting them with diagnostic `fprintf` probes is routine, but load-bearing logic belongs in the `patches/` build (see below), not here — regeneration silently discards inline edits.
+The recompiled MIPS code lives in-repo at `RecompiledFuncs/` — `funcs_*.c` plus `funcs.h`, `lookup.cpp`, and `recomp_overlays.inl`. It is **gitignored** (a derivative of the copyrighted ROM; generated locally, never committed) and regenerated from `rogue_squadron.toml` with `cmake --build build --config Debug --target regen_funcs`; the next build re-globs automatically (`CONFIGURE_DEPENDS`). These are auto-generated; hand-instrumenting them with diagnostic `fprintf` probes is routine, but load-bearing logic belongs in the `patches/` build (see below), not here — regeneration silently discards inline edits.
 
 The forked submodules under `lib/` carry intentional `if(false) fprintf(...)` debug-toggle cruft and game-specific defensive guards. **Do not propose stripping these** as cleanup; they are intentional. (The KSEG0 pointer guards are a separate, tracked retirement — see Open work.)
 
@@ -67,7 +68,6 @@ for. Any variable can be set on the command line with `--set NAME=VALUE`.
 | `ROGUESQ_F5_CHUNK_BOUND=0` | Disable the F5 DL chunk-bounded fetch rule (default on) |
 | `ROGUESQ_LLE_FORCE=1` | Run graphics through the recompiled RSP ucode instead of HLE (diagnostic only — see dead ends) |
 | `ROGUESQ_FB_GUARDS=0` | Disable the host framebuffer-window guards for A/B against goldens |
-| `ROGUESQ_VOICE_UNSTICK` | Legacy host watchdog (in `rt64_render_context.cpp`, default OFF) that clears the streamed-voice active byte a stuck cutscene waits on. Obsolete now that the demo-freeze root cause is fixed (see the Audio note under Architectural quirks); kept as a diagnostic only |
 | `ROGUESQ_NO_AUDIO_UCODE=1` | Silent audio stub instead of the MusyX synth |
 | `ROGUESQ_DUMP_PCM=<path>` | Write the synth output to a 22050 Hz stereo WAV |
 | `ROGUESQ_RENDER_SONG=<key>` | Force a specific song (0 = the N64-logo music) |
@@ -123,7 +123,7 @@ The primary correctness workflow — diff a live run against a Project64 golden 
 
 ## Patches build (overriding auto-generated functions)
 
-**Do not hand-edit `E:/Projects/N64Recomp/RecompiledFuncs/funcs_*.c` for defensive guards or game-logic overrides.** Those edits are regeneration-hostile and made the codebase brittle for months. Use the `patches/` build — the Zelda64Recompiled pattern, with one difference:
+**Do not hand-edit `RecompiledFuncs/funcs_*.c` for defensive guards or game-logic overrides.** Those edits are regeneration-hostile and made the codebase brittle for months. Use the `patches/` build — the Zelda64Recompiled pattern, with one difference:
 
 **We use `mips64-elf-gcc`, not `clang -target mips`.** The official LLVM Windows installer ships without the MIPS backend (`clang -print-targets | findstr mips` returns nothing on 19/20/22-rc). Linux LLVM packages do include MIPS; on Linux just `apt install clang lld make` and override `MIPS_GCC` / `MIPS_LD`. On Windows, install the [n64-tools/gcc-toolchain-mips64](https://github.com/n64-tools/gcc-toolchain-mips64/releases) prebuilt MIPS GCC 12.2.0 — the CMake config expects `E:/mips-toolchain` (override with `-DMIPS_TOOLCHAIN_DIR=...`).
 
@@ -188,8 +188,7 @@ RecompiledFuncs = .lib).
 | MIPS GCC | `E:/mips-toolchain/bin/mips64-elf-gcc.exe` |
 | MIPS LD | `E:/mips-toolchain/bin/mips64-elf-ld.exe` |
 | `make` | `mingw32-make` (any MinGW install) |
-| N64Recomp (patches) | `build/Debug/N64Recomp.exe` — built from the submodule via `N64RecompCLI`; supports `--dump-context` + `func_reference_syms_file`. Use ONLY for the patches pipeline |
-| N64Recomp (main regen) | `E:/Projects/N64Recomp/Debug/N64Recomp.exe` — use for full main-tree regeneration. Rebuild it from current source if it truncates (`cmake --build build_new --config Debug --target N64RecompCLI` in the N64Recomp repo, then copy `build_new/Debug/N64Recomp.exe` here) — a stale binary reads past the entrypoint into a `cache` instr; see dead ends |
+| N64Recomp | `build/Debug/N64Recomp.exe` — built from the `lib/N64ModernRuntime/N64Recomp` submodule via `N64RecompCLI`; used for both the patches pipeline and the main regen (`regen_funcs` target). Supports `--dump-context` + `func_reference_syms_file`. If a regen truncates `funcs.h` to ~7 lines, the exe is stale — rebuild it (`cmake --build build --config Debug --target N64RecompCLI`); see dead ends |
 
 See [patches/README.md](patches/README.md) for the full how-to.
 
@@ -218,7 +217,7 @@ Chunks are contiguous 0x108-byte blocks; the interpreter walks chunk content lin
 
 Rogue Squadron drives audio through Factor 5's **MusyX** engine, and **SFX and music work**: the CPU-side MusyX sequencer submits `M_AUDTASK`s, and a host-side synth path produces PCM that flows through `queue_samples` → SDL ([main.cpp](src/main/main.cpp)). The RSP synth microcode itself is stubbed (`aspMain` on MusyX task data hangs — no shared format with stock ucode), so the M_AUDTASK RSP call returns `RspExitReason::Broke` and the synthesis happens host-side instead. `ROGUESQ_NO_AUDIO_UCODE=1` reverts to a silent stub; `ROGUESQ_DUMP_PCM` / `ROGUESQ_RENDER_SONG` drive offline capture.
 
-Subtitled **dialogue uses a separate codec, MORT** (per the [rerogue](https://github.com/dpethes/rerogue) PC-version RE). Contrary to earlier notes, MORT is **fully recompiled and works** — `tools/mort_decode.py` / `tools/MORTDecoder.cpp` are the offline reference. The demo / FrontEnd cutscene freeze that was long blamed on a missing MORT codec was actually an **N64Recomp codegen bug**: `bgezal`/`bltzal` did not emit the unconditional `$ra = PC+8` link, so the audio decoder's `bltzal $zero` PC-load idiom got a garbage coefficient-table pointer and `applyVoiceDelayFilter` faulted/spun, starving the cooperative scheduler. Fixed in the recompiler (`recompilation.cpp` emits `emit_link_register` unconditionally) plus a full regen. See project memory `demo-voiceline-freeze-2026-09-13`. `ROGUESQ_VOICE_UNSTICK` (the old host watchdog in [rt64_render_context.cpp](src/main/rt64_render_context.cpp)) is now obsolete, kept as a diagnostic. `tools/extract_speech_table.py` extracts the voiceId→text table.
+Subtitled **dialogue uses a separate codec, MORT** (per the [rerogue](https://github.com/dpethes/rerogue) PC-version RE). Contrary to earlier notes, MORT is **fully recompiled and works** — `tools/mort_decode.py` / `tools/MORTDecoder.cpp` are the offline reference. The demo / FrontEnd cutscene freeze that was long blamed on a missing MORT codec was actually an **N64Recomp codegen bug**: `bgezal`/`bltzal` did not emit the unconditional `$ra = PC+8` link, so the audio decoder's `bltzal $zero` PC-load idiom got a garbage coefficient-table pointer and `applyVoiceDelayFilter` faulted/spun, starving the cooperative scheduler. Fixed in the recompiler (`recompilation.cpp` emits `emit_link_register` unconditionally) plus a full regen. See project memory `demo-voiceline-freeze-2026-09-13`. The old `ROGUESQ_VOICE_UNSTICK` host watchdog has been removed. `tools/extract_speech_table.py` extracts the voiceId→text table.
 
 The **structure-destruction attract-demo freeze** (jade moon and any demo that blows up a structure) is **FIXED** ([plans/jade-moon-demo-freeze-plan.md](plans/jade-moon-demo-freeze-plan.md)): during an explosion an NPC has `npc+0x190 == NULL`, so `getNpcCurrentHealth` derefs a wild address and AVs; the SEH-swallowed AV leaves the gfx-frame barrier inconsistent → deadlock. The `patches/npc_health_guard.c` override guards the read. Note it only took effect once `PatchesLib` was made an **OBJECT** library (see the patches section) — getNpcCurrentHealth is reached only via the `func_map`/`LOOKUP_FUNC` indirect path, and a static-lib override does not win that address-of reference. When a recompiled function hangs on data that decodes fine offline, suspect a codegen mistranslation of a rare instruction (especially the `*al` link-branches) before deep subsystem RE.
 
@@ -295,6 +294,7 @@ For a hang specifically: if it's a cutscene/demo, suspect a recompiler codegen m
 - **No emojis** in code, comments, or docs unless explicitly requested.
 - **No trailing summary blocks** in chat responses — one-line wrap-up max.
 - Default to **no comments**. Add one only when the WHY is non-obvious (a workaround for a specific bug, a hidden invariant, a non-visible constraint).
+- **Comments are terse and matter-of-fact.** State the fact, not the reasoning journey. No multi-paragraph narration, no dated blow-by-blow history, no "we tried X then Y" storytelling in a comment — one or two plain lines. This applies to config comments (e.g. `rogue_squadron.toml`) too.
 - Don't reference the current task or session in comments — they rot.
 - Prefer **editing existing files** over creating new ones. The runtime is already large; new files attract drift.
 - For probe instrumentation in `funcs_*.c`, rate-limit:
@@ -310,7 +310,7 @@ Priorities, per the README's [Open work](README.md#open-work):
 1. **Display-list desyncs** — about a dozen per run, typically garbage right after a material sub-DL returns. Root-cause with [docs/f5-model-dl-spec.md](docs/f5-model-dl-spec.md) and `tools/validate/f5_dl_walk.py`.
 2. **Model texturing beyond the cinematic** — the RT64-side texture/UV bug (see the F5 GBI quirk). Byte-faithful stream confirmed; the defect is in RT64.
 3. **Attract-demo stability** — the structure-destruction freeze (jade moon et al.) is now FIXED via `patches/npc_health_guard.c` + the OBJECT-library link fix ([plans/jade-moon-demo-freeze-plan.md](plans/jade-moon-demo-freeze-plan.md)). The Tatooine-demo freeze was fixed earlier (an N64Recomp link-branch codegen bug; MORT itself is recompiled and works). Watch for any further demo-specific stalls (Kile II / Taloraan / Fest / Trench Run untested end-to-end).
-4. **Retire the defensive KSEG0 pointer guards** — proven inert against hardware-golden runs; slated for removal via the TOML plus a regen. See [docs/plan-kseg-guard-migration.md](docs/plan-kseg-guard-migration.md).
+4. **Retire the remaining KSEG0 pointer guards** — proven inert against hardware-golden runs. The cycle-cap counters, the matpool free-list probes, and the matpool page-guard watchpoint are already gone from `rogue_squadron.toml` and `hook_helpers.cpp`; the plain KSEG0 entry-bail / skip-store hooks in the TOML are what is left. Remove via the TOML plus a regen, verifying with a boot-to-menu and a demo run each time.
 5. **Function renaming** of `func_8XXXXXXX` symbols — pick a memory-map region or subsystem, pattern-match against the `rogue_squadron64` decomp's m2c output and string refs, propose meaningful names. Run `tools/rename/lint_toml_syms.py` after every batch. See [tools/rename/README.md](tools/rename/README.md) and [docs/game-architecture.md](docs/game-architecture.md).
 6. **Keyboard input** — port Zelda64Recompiled's bind/rebind UI.
 

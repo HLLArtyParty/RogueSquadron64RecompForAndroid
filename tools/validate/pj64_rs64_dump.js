@@ -34,7 +34,15 @@ events.onexec(0x80000B20, function () { console.log("[rs64_dump] loadOverlay a0=
 // recomp probe: dump a golden at draw #200 (Tatooine demo, ~77s) so we can compare hardware's sky
 // modelview (0x80700040) against ours. See plans/skybox-not-rendering-plan.md.
 var sky = 0;
-events.onexec(0x8005C378, function () { sky++; if (sky == 60) dump("sky_frame60"); if (sky == 200) dump("sky_frame200"); });
+events.onexec(0x8005C378, function () {
+    sky++;
+    if (sky == 60) dump("sky_frame60"); if (sky == 200) dump("sky_frame200");
+    // Tatooine attract-demo goldens for the LOD investigation: two moments (different camera
+    // distances → different per-object LOD levels). Full RDRAM, so meshInstance+0xA / obj+0x19A /
+    // camera globals (0x8011A7D4/0x801163C0/0x8011A8CC, D_8011D088) are all captured.
+    if (sky == 120) dump("tatooine_demo_f120");
+    if (sky == 300) dump("tatooine_demo_f300");
+});
 console.log("[rs64_dump] hooks installed");
 
 // per-frame dt inputs of cinematicComputeDt (0x800AF360): after timeSnapshotFiller returns (pc 0x800AF374),

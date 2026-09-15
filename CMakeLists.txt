@@ -62,8 +62,9 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_BINARY_DIR}/rt64)
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib/N64ModernRuntime ${CMAKE_BINARY_DIR}/N64ModernRuntime)
 
 # ---- RecompiledFuncs ----
-# Path to the N64Recomp output — adjust if you move the files
-set(RECOMP_FUNCS_DIR "${CMAKE_SOURCE_DIR}/../N64Recomp/RecompiledFuncs")
+# N64Recomp output. Gitignored (derivative of the copyrighted ROM; generated
+# locally, never committed). Regenerate with the `regen_funcs` target.
+set(RECOMP_FUNCS_DIR "${CMAKE_SOURCE_DIR}/RecompiledFuncs")
 
 add_library(RecompiledFuncs STATIC)
 
@@ -97,8 +98,10 @@ target_include_directories(RecompiledFuncs PRIVATE
     ${CMAKE_SOURCE_DIR}/lib/N64ModernRuntime/N64Recomp/include
 )
 
-file(GLOB RECOMP_C_SOURCES   ${RECOMP_FUNCS_DIR}/*.c)
-file(GLOB RECOMP_CXX_SOURCES ${RECOMP_FUNCS_DIR}/*.cpp)
+# CONFIGURE_DEPENDS: re-glob on build so a regen_funcs run that adds/removes a
+# file (e.g. lookup.cpp) is picked up without a manual reconfigure.
+file(GLOB RECOMP_C_SOURCES   CONFIGURE_DEPENDS ${RECOMP_FUNCS_DIR}/*.c)
+file(GLOB RECOMP_CXX_SOURCES CONFIGURE_DEPENDS ${RECOMP_FUNCS_DIR}/*.cpp)
 target_sources(RecompiledFuncs PRIVATE ${RECOMP_C_SOURCES} ${RECOMP_CXX_SOURCES})
 
 # ---- Patches (Zelda-style override layer) ----
@@ -190,6 +193,23 @@ else()
     message(STATUS "  See patches/README.md for setup; rebuild without patches for now.")
 endif()
 
+# ---- Regenerate RecompiledFuncs (opt-in) ----
+# Runs N64Recomp on the in-repo rogue_squadron.toml, regenerating RecompiledFuncs/
+# from the decomp ELF (elf_path in the toml -> ../rogue_squadron64/build). Not in
+# the default build: regen is heavy and needs the ELF. Run explicitly, then re-run
+# cmake configure (RecompiledFuncs are globbed at configure time):
+#   cmake --build build --config Debug --target regen_funcs
+add_custom_target(regen_funcs
+    COMMAND ${N64RECOMP_EXE} "${CMAKE_SOURCE_DIR}/rogue_squadron.toml"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    COMMENT "Regenerating RecompiledFuncs from rogue_squadron.toml (needs decomp ELF + N64Recomp.exe)"
+    VERBATIM
+)
+# Build the recompiler first so a stale exe can't silently truncate the output.
+if (TARGET N64RecompCLI)
+    add_dependencies(regen_funcs N64RecompCLI)
+endif()
+
 # ---- Main executable ----
 # Hybrid graphics pipeline (2026-05-09):
 #   - HLE side: RT64's Factor 5 GBI module (lib/rt64/src/gbi/rt64_gbi_f3dfactor5.cpp)
@@ -248,6 +268,7 @@ add_executable(RogueSquadron64Recomp
     ${CMAKE_SOURCE_DIR}/src/main/rt64_render_context.cpp
     ${CMAKE_SOURCE_DIR}/src/main/register_overlays.cpp
     ${CMAKE_SOURCE_DIR}/src/main/upstream_compat.cpp
+    ${CMAKE_SOURCE_DIR}/src/main/hook_helpers.cpp
     ${CMAKE_SOURCE_DIR}/src/rsp/aspMain.cpp
     ${CMAKE_SOURCE_DIR}/src/rsp/dpc_bridge.cpp
     ${CMAKE_SOURCE_DIR}/src/rsp/dpc_bridge_diag.cpp

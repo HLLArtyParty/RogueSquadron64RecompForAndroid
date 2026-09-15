@@ -1,0 +1,774 @@
+[input]
+entrypoint = 0x80000400
+elf_path = "../rogue_squadron64/build/roguesquadron.elf"
+rom_file_path = "../rogue_squadron64/rogue_squadron.z64"
+output_func_path = "RecompiledFuncs"
+
+# The 3 overlays (.ovl.mission/menu/cinematic) share VA 0x800A5130 and swap at
+# runtime; direct jal binds every call to one overlay at link time. Route all
+# calls through func_map so the rs64_load_overlay hook points it at the live
+# overlay. Runtime-provided libultra funcs still resolve to direct _recomp calls.
+use_lookup_for_all_function_calls = true
+
+# Dual-entry funcs: splat merged both entries into one, so the offset entry is
+# missing from the symbol table. Re-register it standalone for get_function().
+manual_funcs = [
+    { name = "func_8008ED70", section = ".text", vram = 0x8008ED70, size = 0x150 },
+]
+
+[patches]
+stubs = [
+    # Boot BSS-clear (bzero at top of main, base D_8010D200). Host RDRAM is
+    # VirtualAlloc/mmap zero-filled, so the clear is redundant and stubbing is a
+    # cold-boot no-op. Would need a real host memset only if a soft-reset ever
+    # re-entered main() without re-zeroing RDRAM. cache 0x0D blocks recompiling it.
+    "func_8000040C",
+    # Broken cache-flush loop (infinite on hw if a1 != 16); dead code. Stub also
+    # avoids the unsupported cache 0x0D at 0x80018EDC during regen.
+    "func_80018ED4",
+    # Has a cache instruction; host provides zmemcpy (upstream_compat.cpp).
+    "zmemcpy",
+    # RSP microcode blobs — not MIPS code, must not be recompiled
+    "gspF3DEXTextStart",
+    "gspF3DEXDataStart",
+    "aspMainTextStart",
+    "aspMainDataStart",
+    "__OSGlobalIntMask",  # libultra data symbol misidentified as function
+    # fake_func_ fragments: small splat-generated stubs that branch outside bounds
+    "fake_func_800027B8",
+    "fake_func_8000337C",
+    "fake_func_80003424",
+    "fake_func_8000537C",
+    "fake_func_80005568",
+    "fake_func_8000595C",
+    "fake_func_80006BFC",
+    "fake_func_8000737C",
+    "fake_func_800074D8",
+    "fake_func_8000751C",
+    "fake_func_80007908",
+    "fake_func_800186D8",
+    "fake_func_80019808",
+    "fake_func_8001C3FC",
+    "fake_func_80023968",
+    "fake_func_80024128",
+    "fake_func_80024878",
+    "fake_func_80024A0C",
+    "fake_func_8003DF98",
+    "fake_func_8003E55C",
+    "fake_func_80040304",
+    "fake_func_80041EEC",
+    "fake_func_800457CC",
+    "fake_func_8004661C",
+    "fake_func_800496F4",
+    "fake_func_8004CCF8",
+    "fake_func_800538AC",
+    "fake_func_80054648",
+    "fake_func_800555E8",
+    "fake_func_80055698",
+    "fake_func_80055A2C",
+    "fake_func_80056344",
+    "fake_func_80059B4C",
+    "fake_func_8005A11C",
+    "fake_func_8005C61C",
+    "fake_func_8005EE64",
+    "fake_func_800613B8",
+    "fake_func_80064294",
+    "fake_func_80064934",
+    "fake_func_80065A5C",
+    "fake_func_800663AC",
+    "fake_func_80069AEC",
+    "fake_func_8006ACA4",
+    "fake_func_8006B704",
+    "fake_func_8006D8FC",
+    "fake_func_8006F4AC",
+    "fake_func_80072CE8",
+    "fake_func_80079278",
+    "fake_func_80079CD8",
+    "fake_func_8007A0E8",
+    "fake_func_8007A86C",
+    "fake_func_8007C298",
+    "fake_func_80082268",
+    "fake_func_800825C8",
+    "fake_func_80093E74",
+    "fake_func_80094348",
+    "fake_func_8009711C",
+    "fake_func_80097D58",
+    "fake_func_80099C4C",
+    "fake_func_80099FDC",
+    "fake_func_8009C2C8",
+    "fake_func_8009D7CC",
+    "func_8009D8BC",  # 2-word data fragment decoded as scd instruction
+    # libultra OS exception/dispatch handler — handwritten, cross-function branches
+    "func_8002BB34",
+    "func_8009D978",  # 2-word data fragment with garbage JAL target
+    # fake_func_ fragments in overlays
+    "fake_func_800AA6CC",
+    "fake_func_800AAADC",
+    "fake_func_800AD378",
+    "fake_func_800AE3E4",
+    "fake_func_800AEC54",
+    "fake_func_800AF6A8",
+    "fake_func_800B2628",
+    "fake_func_800B42BC",
+    "fake_func_800B47C4",
+    "fake_func_800B58B4",
+    "fake_func_800B75C4",
+    "fake_func_800B89F4",
+    "fake_func_800BCC38",
+    "fake_func_800BEBFC",
+    "fake_func_800BF498",
+    "fake_func_800BF784",
+    "fake_func_800C41AC",
+    "fake_func_800C5898",
+    "fake_func_800C64A4",
+    "fake_func_800C6968",
+    "fake_func_800C7DB4",
+    "fake_func_800CA26C",
+    "fake_func_800CC038",
+    "fake_func_800CC3D4",
+    "fake_func_800CEF1C",
+    "fake_func_800D2C98",
+    "fake_func_800D4EC4",
+    "fake_func_800DD2C4",
+    "fake_func_800DFB8C",
+    "fake_func_800E406C",
+    "fake_func_800E447C",
+    "fake_func_800E71C8",
+    "fake_func_800E8A34",
+    "fake_func_800E9AD8",
+    "func_800E9AE0",  # branches outside function bounds to 0x800E9BD4, can't be compiled as-is
+    "fake_func_800EC10C",
+    "fake_func_800EC6EC",
+    "fake_func_800ECE04",
+    "fake_func_800ED148",
+    "fake_func_800EFD74",
+    "fake_func_800EFDDC",
+    "fake_func_800FA248",
+    "fake_func_800FBE14",
+    "fake_func_800FEF04",
+    "fake_func_80101CCC",
+    "fake_func_80102A98",
+    "fake_func_8010357C",
+    "fake_func_80103D08",
+    "fake_func_80104208",
+    "fake_func_801044D8",
+    "fake_func_80105B54",
+    "fake_func_8010619C",
+    "fake_func_80106BE8",
+    "fake_func_8010721C",
+    "fake_func_80107EA4",
+    "fake_func_80108B8C",
+    "fake_func_80109428",
+    "fake_func_80109618",
+    # Factor5 recursive mutex/queue (832A0.s): counter D_800A1780 + 1-slot msgq
+    # D_80149990. Stubbed — un-stubbing deadlocks at boot (BSS-uninit counter
+    # desyncs from the queue token). Real fix: host std::recursive_mutex or
+    # BSS-zero at boot.
+    "factor5MutexAcquire",
+    "factor5MutexRelease",
+    "factor5QueueBlock",
+    "factor5QueueSignal",
+    # Inter-function branches (recomp errors); need symbol merge/split first.
+    "func_800927B0",
+    "func_80092A54",
+    "func_80092CF0",
+    "func_80092F10",
+    # func_8008ED00 (MusyX shutdown) is NOT stubbed: hardware calls it on every
+    # display-mode change, and stubbing triple-stacked musyxSynthFrame in the SI
+    # callback table (no music). Its spin loop needs the host osYieldThread.
+]
+
+# convertMat3x4ToN64Mtx: NOP the 4 cache 0x0D at 0x80018D88-D94 so the rest
+# (real FP work) still recompiles. It also uses the PIC return `jr $t9` (t9=ra
+# at entry), which N64Recomp mis-emits as LOOKUP_FUNC; the patch below swaps it
+# for `jr $ra`.
+[[patches.instruction]]
+func = "convertMat3x4ToN64Mtx"
+vram = 0x80018D88
+value = 0x00000000
+
+[[patches.instruction]]
+func = "convertMat3x4ToN64Mtx"
+vram = 0x80018D8C
+value = 0x00000000
+
+[[patches.instruction]]
+func = "convertMat3x4ToN64Mtx"
+vram = 0x80018D90
+value = 0x00000000
+
+[[patches.instruction]]
+func = "convertMat3x4ToN64Mtx"
+vram = 0x80018D94
+value = 0x00000000
+
+# `jr $t9` -> `jr $ra` at 0x80018E58 (t9=ra at entry; only `jr $ra` is read as
+# a function exit by N64Recomp).
+[[patches.instruction]]
+func = "convertMat3x4ToN64Mtx"
+vram = 0x80018E58
+value = 0x03E00008
+
+# osInvalDCache/osInvalICache/osWritebackDCache[All] also have cache instructions
+# but N64Recomp treats them as external imports (runtime-provided).
+
+# 0x80092*** cluster: real logic with interleaved cache instructions. NOP each
+# cache so the bodies stay recompilable (caches are no-ops on the host).
+
+# func_8009264C — 5 cache instructions
+[[patches.instruction]]
+func = "resampleVoicePointTableSamples"
+vram = 0x800926FC
+value = 0x00000000
+[[patches.instruction]]
+func = "resampleVoicePointTableSamples"
+vram = 0x80092710
+value = 0x00000000
+[[patches.instruction]]
+func = "resampleVoicePointTableSamples"
+vram = 0x80092780
+value = 0x00000000
+[[patches.instruction]]
+func = "resampleVoicePointTableSamples"
+vram = 0x8009278C
+value = 0x00000000
+[[patches.instruction]]
+func = "resampleVoicePointTableSamples"
+vram = 0x80092798
+value = 0x00000000
+
+# func_800928D4 — 5 cache instructions
+[[patches.instruction]]
+func = "resampleVoiceLutSamples"
+vram = 0x800929A0
+value = 0x00000000
+[[patches.instruction]]
+func = "resampleVoiceLutSamples"
+vram = 0x800929B4
+value = 0x00000000
+[[patches.instruction]]
+func = "resampleVoiceLutSamples"
+vram = 0x80092A24
+value = 0x00000000
+[[patches.instruction]]
+func = "resampleVoiceLutSamples"
+vram = 0x80092A30
+value = 0x00000000
+[[patches.instruction]]
+func = "resampleVoiceLutSamples"
+vram = 0x80092A3C
+value = 0x00000000
+
+# func_80092BA8 — 2 cache instructions
+[[patches.instruction]]
+func = "resampleVoiceConstantSamples"
+vram = 0x80092C1C
+value = 0x00000000
+[[patches.instruction]]
+func = "resampleVoiceConstantSamples"
+vram = 0x80092C30
+value = 0x00000000
+
+# func_80092E48 — 2 cache instructions
+[[patches.instruction]]
+func = "resampleVoiceLutSamplesPacked"
+vram = 0x80092EC0
+value = 0x00000000
+[[patches.instruction]]
+func = "resampleVoiceLutSamplesPacked"
+vram = 0x80092ED4
+value = 0x00000000
+
+# func_80092F10 is stubbed above, so its 3 cache-NOP patches were dead and were
+# removed. Re-add them only if it is ever un-stubbed.
+
+# func_8009314C — 2 cache instructions
+[[patches.instruction]]
+func = "copyVoiceSamplesS16"
+vram = 0x80093184
+value = 0x00000000
+[[patches.instruction]]
+func = "copyVoiceSamplesS16"
+vram = 0x80093290
+value = 0x00000000
+
+# func_800932C4 — 2 cache instructions
+[[patches.instruction]]
+func = "copyVoiceSamplesLut"
+vram = 0x80093304
+value = 0x00000000
+[[patches.instruction]]
+func = "copyVoiceSamplesLut"
+vram = 0x80093470
+value = 0x00000000
+
+# func_800934A4 — 2 cache instructions
+[[patches.instruction]]
+func = "zeroAudioBufferWords"
+vram = 0x800934AC
+value = 0x00000000
+[[patches.instruction]]
+func = "zeroAudioBufferWords"
+vram = 0x800934BC
+value = 0x00000000
+
+# =============================================================================
+# Host hooks. Every entry here calls into src/main/hook_helpers.cpp or
+# upstream_compat.cpp; the inline KSEG0 guards that used to sit here are gone.
+# =============================================================================
+
+# Diagnostic hooks (ROGUESQ_LOG_HOOKS=1; silent otherwise). Helper rs64_dbg_log4
+# in upstream_compat.cpp. NOTE: a hook body is inlined at function entry, so a
+# bare `return` exits the WHOLE function — wrap logging in `if (s_log) {...}`.
+# func_8003DFA0 = cinematic outer loop (gates: B40+0x04, B40+0x21, B50 bit5,
+# B58 bit25); func_800A5D80 = inner loop (advances on a1==2 or B50 bit5).
+[[patches.hook]]
+func = "mainGameLoop"
+text = '''{
+    static int s_log = -1;
+    if (s_log < 0) {
+        const char* e = getenv("ROGUESQ_LOG_HOOKS");
+        s_log = (e && *e && *e != '0') ? 1 : 0;
+    }
+    if (s_log) {
+        static int s_count = 0;
+        ++s_count;
+        if (s_count <= 4 || (s_count & 63) == 0) {
+            extern void rs64_dbg_log4(const char* tag, unsigned a, unsigned b, unsigned c, unsigned d);
+            uint32_t b04 = (uint32_t)MEM_BU(0xB44, (gpr)0xFFFFFFFF80130000ULL);
+            uint32_t b21 = (uint32_t)MEM_BU(0xB61, (gpr)0xFFFFFFFF80130000ULL);
+            uint32_t b50 = (uint32_t)MEM_W(0xB50, (gpr)0xFFFFFFFF80130000ULL);
+            uint32_t b58 = (uint32_t)MEM_W(0xB58, (gpr)0xFFFFFFFF80130000ULL);
+            rs64_dbg_log4("8003DFA0 b40+04 b40+21 B50 B58", b04, b21, b50, b58);
+        }
+    }
+}'''
+
+[[patches.hook]]
+func = "cinematicLoopBody"
+text = '''{
+    // Cinematic is running, so attribution is over: clear g_current_scene here
+    // (the NTSC N64-logo branch that would clear it is skipped) or the
+    // attribution VI redirect steals the cinematic's swaps.
+    extern volatile int g_current_scene; g_current_scene = -1;
+
+    // Periodic yield to break the cinematic thread-starvation stall.
+    // ROGUESQ_DISABLE_CINE_YIELD=1 disables.
+    extern void rs64_cine_yield(void);
+    static int s_disable = -1;
+    if (s_disable < 0) {
+        const char* e = getenv("ROGUESQ_DISABLE_CINE_YIELD");
+        s_disable = (e && *e && *e != '0') ? 1 : 0;
+    }
+    if (!s_disable) rs64_cine_yield();
+
+    static int s_log = -1;
+    if (s_log < 0) {
+        const char* e = getenv("ROGUESQ_LOG_HOOKS");
+        s_log = (e && *e && *e != '0') ? 1 : 0;
+    }
+    if (s_log) {
+        static int s_count = 0;
+        ++s_count;
+        if (s_count <= 4 || (s_count & 63) == 0) {
+            extern void rs64_dbg_log4(const char* tag, unsigned a, unsigned b, unsigned c, unsigned d);
+            rs64_dbg_log4("800A5D80 a0 a1 a2 count", (unsigned)ctx->r4, (unsigned)ctx->r5, (unsigned)ctx->r6, (unsigned)s_count);
+        }
+    }
+}'''
+
+# Empty-pool sentinel for load_asset_with_malloc_flags. The audio walker
+# func_80097518 reads an empty pool's first word as -1 = "no entries", but
+# zero-init RAM leaves it 0 -> infinite walker loop. Stamp -1 at return (r2 =
+# buffer). Load-bearing boot-deadlock fix. ROGUESQ_DISABLE_EMPTY_POOL_SENTINEL.
+[[patches.hook]]
+func = "load_asset_with_malloc_flags"
+before_vram = 0x80064884   # the `jr $ra` instruction
+text = '''{
+    static int s_force = -1;
+    if (s_force < 0) {
+        const char* e = getenv("ROGUESQ_DISABLE_EMPTY_POOL_SENTINEL");
+        s_force = (e && *e && *e != '0') ? 0 : 1;
+    }
+    if (s_force) {
+        uint32_t buf_ptr = (uint32_t)ctx->r2;
+        if (buf_ptr >= 0x80000000u && buf_ptr < 0x80800000u) {
+            int32_t* word_ptr = (int32_t*)(rdram + (buf_ptr - 0x80000000u));
+            if (*word_ptr == 0) {
+                *word_ptr = -1;
+            }
+        }
+    }
+}'''
+
+# Per-frame loop counter (blocks on the VI retrace queue each iter, so its rate
+# = the real frame rate). Logs first 4 + every 64th iter.
+[[patches.hook]]
+func = "viRetraceHandlerThread"
+before_vram = 0x800198E8   # L_800198E8 — top of per-frame loop
+text = '''{
+    static int s_count = 0;
+    int n = ++s_count;
+    if (n <= 4 || (n & 63) == 0) {
+        extern void rs64_dbg_log4(const char* tag, unsigned a, unsigned b, unsigned c, unsigned d);
+        rs64_dbg_log4("game_frame_iter", n, 0, 0, 0);
+    }
+    // All-displayed deadlock rescue: buffers all in state 5 with none in 1-4 is
+    // an illegal steady state (5->0 demotion can't fire, producer can't alloc) =
+    // the cinematic freeze. After it persists 32 consumer passes, demote the 5s
+    // to 0. r22 = buffer-state base (0x80128EAC). ROGUESQ_BUFSTUCK_RESCUE=0 disables.
+    {
+        extern char* getenv(const char*);
+        static int s_resc = -1; static int s_persist = 0; static unsigned s_rescued = 0;
+        if (s_resc < 0) { const char* e = getenv("ROGUESQ_BUFSTUCK_RESCUE"); s_resc = (e && e[0] == '0') ? 0 : 1; }
+        if (s_resc) {
+            unsigned cnt = (unsigned)MEM_BU(ctx->r22, -0X1); if (cnt > 3) cnt = 3;
+            int fives = 0, inflight = 0; unsigned k;
+            for (k = 0; k < cnt; ++k) {
+                unsigned st = (unsigned)MEM_BU(ctx->r22, -0X4 + (int)k);
+                if (st == 5) ++fives; else if (st >= 1 && st <= 4) ++inflight;
+            }
+            if (cnt >= 2 && fives >= 2 && inflight == 0) {
+                if (++s_persist >= 32) {
+                    s_persist = 0; ++s_rescued;
+                    for (k = 0; k < cnt; ++k)
+                        if ((unsigned)MEM_BU(ctx->r22, -0X4 + (int)k) == 5) MEM_B(-0X4 + (int)k, ctx->r22) = 0;
+                    {
+                        extern void rs64_dbg_log4(const char* tag, unsigned a, unsigned b, unsigned c, unsigned d);
+                        rs64_dbg_log4("bufstuck_rescue", s_rescued, 0, 0, 0);
+                    }
+                }
+            } else { s_persist = 0; }
+        }
+    }
+}'''
+
+# RETIRED NOBLOCK experiments. VI-driven mode (default) runs the hardware
+# protocol, where these recvs must BLOCK; the host osRecvMesg override applies
+# NOBLOCK only when ROGUESQ_VI_DRIVEN_LOOP=0. Reverted sites (func @ vram):
+#   submitGfxFrame @0x8000C4AC / @0x8000C2BC / @0x8000C0B8
+#   bufferArbiterProducerScanWait @0x8000BFCC / @0x8000BF98
+#   waitForPostSwapAck @0x8001C278   waitOnVideoQueue @0x8001BEA4
+#   bufferArbiterProducerMark osRecvMesg(D_80128D10) — NOBLOCK didn't help;
+#     needs host state-machine modeling, not an instruction patch.
+
+# waitForAnyAudioSlot busy-waits on func_8008E57C (never non-zero with stubbed
+# audio). NOP the loop's beq.
+[[patches.instruction]]
+func = "waitForAnyAudioSlot"
+vram = 0x800668CC
+value = 0x00000000
+
+# Same busy-wait pattern in menuOverlayInit (post-transition menu). NOP the beq.
+[[patches.instruction]]
+func = "menuOverlayInit"
+vram = 0x800C593C
+value = 0x00000000
+
+# ROGUESQ_BOOT_TARGET=level:<id>[,craft] -- boot straight into a playable mission.
+# This is the one game-thread seam after the boot save-load + front-end state write
+# (runIdleFramesAndLoadSaveData sets gGameSettings+0x20=1 / +0x21=0 to route to the
+# FrontEnd) and before mainGameLoop's dispatch loop. We overwrite that with the
+# run-mission state (+0x04=3, +0x22=1) + the chosen level/craft, so the dispatch enters
+# applyLevelScreenAndCameraSettings -> initMission -> runInMissionFrame with LIVE input.
+# See plans/boot-into-mission-plan.md. Host spec: rs64_boot_target_level (upstream_compat.cpp).
+[[patches.hook]]
+func = "runIdleFramesAndLoadSaveData"
+before_vram = 0x8006DB18   # epilogue: after applyAccountUnlocksToSettings, before jr $ra
+text = '''{
+    static int s_done = 0;
+    if (!s_done) {
+        s_done = 1;
+        extern int rs64_boot_target_level(int* craft_out);
+        int craft = -1;
+        int lvl = rs64_boot_target_level(&craft);
+        if (lvl >= 0) {
+            rdram[0x130B40 ^ 3] = (uint8_t)lvl;          // gGameSettings[0] level
+            rdram[0x130B70 ^ 3] = (uint8_t)lvl;          // gCurrentLevel
+            if (craft >= 0) rdram[0x130B41 ^ 3] = (uint8_t)craft;  // craft
+            // master state 1 = mission PREP: mainGameLoop runs initializeNumLives + the
+            // level intro, then sets +0x22/+0x04=3 itself and enters the mission. Entering
+            // at +0x04=3 directly skips that prep -> mission exits instantly (0 lives).
+            rdram[0x130B44 ^ 3] = 1;                     // +0x04 master state -> mission prep
+            rdram[0x130B65 ^ 3] = 1;                     // +0x25 != 0 -> state-1 launch gate (else it bails)
+            rdram[0x130B61 ^ 3] = 1;                     // +0x21 != 0 -> skip front-end attract block
+            rdram[0x130B60 ^ 3] = 0;                     // +0x20 menu sub-state off
+            rdram[0x130B62 ^ 3] = 0;                     // +0x22 off (state 1 sets it on launch)
+            rdram[0x130B3B ^ 3] = 0xFF;                  // force level/craft unlocks
+            rdram[0x130B2D ^ 3] = 0xFF;
+        }
+    }
+}'''
+
+# dpInterruptHandlerThread gates forwarding to game queue D_8011A7E8 on flag
+# 0x8011A89D, which never becomes 1 here -> game thread blocks forever. NOP the
+# gate `beq` at 0x8001C3C4 so it always osSendMesg (delay-slot zeros a1 anyway).
+[[patches.instruction]]
+func = "dpInterruptHandlerThread"
+vram = 0x8001C3C4
+value = 0x00000000
+
+# Diagnostic: trace DP-handler entry + iterations (is the thread alive/ticking?).
+[[patches.hook]]
+func = "dpInterruptHandlerThread"
+text = '''{
+    extern void rs64_dbg_log4(const char* tag, unsigned a, unsigned b, unsigned c, unsigned d);
+    rs64_dbg_log4("dpHandler ENTRY", 0, 0, 0, 0);
+}'''
+
+[[patches.hook]]
+func = "dpInterruptHandlerThread"
+before_vram = 0x8001C380
+text = '''{
+    static unsigned s_iters = 0;
+    extern void rs64_dbg_log4(const char* tag, unsigned a, unsigned b, unsigned c, unsigned d);
+    unsigned n = ++s_iters;
+    if (n <= 4 || (n & 31) == 0) {
+        rs64_dbg_log4("dpHandler iter", n, 0, 0, 0);
+    }
+}'''
+
+# Diagnostic: cinematicInitializer entry + cineState (0x800B0934; non-zero =
+# early-exit). ROGUESQ_LOG_HOOKS=1.
+[[patches.hook]]
+func = "cinematicInitializer"
+text = '''{
+    static int s_log = -1;
+    if (s_log < 0) {
+        const char* e = getenv("ROGUESQ_LOG_HOOKS");
+        s_log = (e && *e && *e != '0') ? 1 : 0;
+    }
+    if (s_log) {
+        static int s_count = 0;
+        int n = ++s_count;
+        unsigned cineState_pre = (unsigned)MEM_W(0X934, S32(0X800B << 16));
+        if (n <= 4 || (n & 63) == 0) {
+            extern void rs64_dbg_log4(const char* tag, unsigned a, unsigned b, unsigned c, unsigned d);
+            rs64_dbg_log4("cineInit n cineState_pre a0 a1", n, cineState_pre, (unsigned)ctx->r4, (unsigned)ctx->r5);
+        }
+    }
+}'''
+
+# func_800C28F0 = attribution screen (menuOverlayInit action 9, first screen
+# after boot). Entry log only.
+[[patches.hook]]
+func = "runMenuModelViewerScreen"   # was func_800C28F0 (renamed in syms); 0x800C28F0 = its entry
+text = '''{ extern void rs64_dbg_log4(const char*, unsigned, unsigned, unsigned, unsigned); rs64_dbg_log4("runMenuModelViewerScreen ENTRY (was func_800C28F0, attribution screen)", 0, 0, 0, 0); }'''
+
+# Attribution pacing (0x800C29F8). Default: pace to the real VI retrace so the
+# producer emits the full glyph set (fixes the white/partial-draw race + gives
+# ~2s duration). ROGUESQ_ATTRIB_HOLD_MS>0 forces the old fixed sleep instead
+# (default 50ms; e.g. 300 for screenshotting); =0 disables both.
+[[patches.hook]]
+func = "runMenuModelViewerScreen"   # was func_800C28F0 (renamed in syms)
+before_vram = 0x800C29F8
+text = '''{
+    static int s_ms = -1;
+    if (s_ms < 0) { const char* e = getenv("ROGUESQ_ATTRIB_HOLD_MS"); s_ms = (e && *e) ? atoi(e) : 50; if (s_ms < 0) s_ms = 0; if (s_ms > 2000) s_ms = 2000; }
+    static int s_log = -1;
+    if (s_log < 0) { const char* e = getenv("ROGUESQ_LOG_HOOKS"); s_log = (e && *e && *e != '0') ? 1 : 0; }
+    if (s_log) { static int n = 0; ++n; if (n <= 40) { extern void rs64_dbg_log4(const char*, unsigned, unsigned, unsigned, unsigned); rs64_dbg_log4("attrib_iter n f22x1k f24x1k", (unsigned)n, (unsigned)(ctx->f22.fl*1000.0f), (unsigned)(ctx->f24.fl*1000.0f), 0); } }
+    static int s_force_sleep = -1;
+    if (s_force_sleep < 0) { const char* e = getenv("ROGUESQ_ATTRIB_HOLD_MS"); s_force_sleep = (e && *e) ? 1 : 0; }
+    if (s_force_sleep) { if (s_ms > 0) { extern void rs64_sleep_ms(unsigned); rs64_sleep_ms((unsigned)s_ms); } }
+    else { extern void rs64_attrib_wait_vi(void); rs64_attrib_wait_vi(); }
+}'''
+
+# menuOverlayInit dispatch log (ROGUESQ_LOG_HOOKS=1; action=r5, mode=r6) and
+# g_current_scene tracking (drives the attribution VI redirect).
+[[patches.hook]]
+func = "menuOverlayInit"
+text = '''{ extern void rs64_dbg_log4(const char*, unsigned, unsigned, unsigned, unsigned); rs64_dbg_log4("menuOverlayInit", (unsigned)ctx->r5, (unsigned)ctx->r6, 0, 0); extern volatile int g_current_scene; g_current_scene = (int)(unsigned)ctx->r5; }'''
+
+# musyxKeyOnVoice (builds per-voice RSP rate/envelope ramps) runs by default.
+# Two entry guards: ROGUESQ_STUB_VOICESTART opt-out, and a period-0 skip (all
+# envelope divisions use the +0x60 period; host C divide would crash on /0).
+[[patches.hook]]
+func = "musyxKeyOnVoice"
+text = '''{ if (getenv("ROGUESQ_STUB_VOICESTART")) { return; } if (MEM_HU(ctx->r4, 0X60) == 0) { return; } }'''
+
+# musyxSynthFrame (0x8009123C) audio tick (viRetraceHandlerThread -> musyxSynthFrame, per VI)
+# does an indirect call `jalr $v0` at 0x80091798 through the N64-RSP-mixer
+# callback slot MEM_W[0x801499D0]. initN64RspMixer (-> initAudioSubsystem)
+# writes a valid function (0x8001A058) into that slot, but on first boot the
+# audio tick runs before initAudioSubsystem, so the slot holds uninitialized
+# garbage (0x801F7910) -> LOOKUP_FUNC -> get_function abort (fatal, bypasses
+# the SEH net).
+#
+# The valid callback IS needed (it drives RSP-task / DL submission — NOPing
+# the call unconditionally dropped send_dl from 64 to 2). So: NOP the jalr
+# and re-issue the call from a hook ONLY when the slot holds a plausible
+# recompiled-code address. The pre-init garbage (0x801F7910, past all code)
+# is skipped; the real callback (0x8001A058) still runs.
+[[patches.instruction]]
+func = "musyxSynthFrame"
+vram = 0x80091798
+value = 0x00000000
+[[patches.hook]]
+func = "musyxSynthFrame"
+before_vram = 0x80091798
+text = '''{
+    uint32_t cb = (uint32_t)(uint64_t)ctx->r2;
+    if (cb >= 0x80000400u && cb < 0x80110000u) {
+        ctx->r4 = ctx->r16;   // delay slot: a0 = s0
+        LOOKUP_FUNC(ctx->r2)(rdram, ctx);
+    }
+}'''
+
+# Pace the 32-iter attribution-display loop (L_8006D980); without it all 32
+# frames flash by in ms. ROGUESQ_ATTRIBUTION_SLEEP_MS=0 disables.
+[[patches.hook]]
+func = "runIdleFramesAndLoadSaveData"
+before_vram = 0x8006D980
+text = '''{
+    extern void rs64_idle_pace(void);
+    rs64_idle_pace();
+}'''
+
+# Runtime overlay registration: boot-time load_overlays only registers
+# .ovl.mission, so calls into the shared VA range keep hitting mission code.
+# Hook loadOverlay past its skip-check (0x80000B3C, s0 = overlay id) to
+# re-register func_map for the live overlay. ids: 0=mission, 1=menu, 2=cinematic.
+[[patches.hook]]
+func = "loadOverlay"
+before_vram = 0x80000B3C
+text = '''{
+    extern void rs64_load_overlay(unsigned int);
+    rs64_load_overlay((unsigned int)ctx->r16);
+}'''
+
+# initFactor5Mutex guard: boot calls it twice; the second re-creates the queue
+# and posts a duplicate token. Skip it to keep the recursive mutex consistent.
+[[patches.hook]]
+func = "initFactor5Mutex"
+text = '''{
+    static int s_inited = 0;
+    if (s_inited) return;
+    s_inited = 1;
+}'''
+
+# rs_malloc zero-init: the game reads a fresh alloc's first word as ==0 =
+# "uninitialized link", but a reused host heap block holds garbage -> wild list
+# walks. Zero the returned range (r18 = ptr, r16 = size) at return.
+[[patches.hook]]
+func = "rs_malloc"
+before_vram = 0x80001C74
+text = '''{
+    gpr addr = ctx->r18;
+    gpr size = ctx->r16;
+    uint32_t addr32 = (uint32_t)addr;
+    uint32_t size32 = (uint32_t)size;
+    if ((addr32 & 0xE0000000u) == 0x80000000u && addr32 < 0x80800000u && size32 > 0 && size32 < 0x100000u && addr32 + size32 <= 0x80800000u) {
+        for (uint32_t i = 0; i < size32; ++i) MEM_B(i, addr) = 0;
+    }
+}'''
+
+# Do not zero-init materialListHead[]: text stops rendering (the stale entries are load-bearing).
+
+# Texture-material pool root-cause fix. initVideoBootWrapper gates
+# createMaterialPool on buildAndRegisterDefaultMaterial succeeding, but that
+# returns 0 (HMT table is an asset-data hole), so the 512-node pool @0x80128EF4
+# is never created and every material function walks a wild free-list. NOP the
+# gate `beq` at 0x800185E8 so the pool always builds (the fall-through doesn't
+# use the registration result as an index, so it's safe).
+[[patches.instruction]]
+func = "initVideoBootWrapper"
+vram = 0x800185E8
+value = 0x00000000
+
+# saveServiceWorker walks the registry list at 0x801128D0, which never gets
+# populated -> wild-ptr AV. Early-return until the registration path is fixed.
+# ROGUESQ_ENABLE_F8006F2CC=1 runs the original body.
+[[patches.hook]]
+func = "saveServiceWorker"
+before_vram = 0x8006F2CC
+text = '''{
+    static int s_enable = -1;
+    if (s_enable < 0) {
+        const char* e = getenv("ROGUESQ_ENABLE_F8006F2CC");
+        s_enable = (e && *e && *e != '0') ? 1 : 0;
+    }
+    if (!s_enable) return;
+}'''
+
+# Cinematic inner loop (L_800A6024): freeze watchdog tick and per-iter pacer.
+[[patches.hook]]
+func = "cinematicLoopBody"
+before_vram = 0x800A6024
+text = '''{
+    // Freeze watchdog: host poll dumps the stack if no tick for 2s.
+    {
+        extern void rs64_cine_iter_tick(unsigned iter);
+        static unsigned s_watchdog_count = 0;
+        rs64_cine_iter_tick(++s_watchdog_count);
+    }
+    // Pace this internal loop to a target FPS. ROGUESQ_CINE_TARGET_FPS=0 disables.
+    {
+        extern void rs64_cine_pace(void);
+        rs64_cine_pace();
+    }
+    // Diagnostic: iterations + gate/cineState. ROGUESQ_LOG_HOOKS=1.
+    {
+        static int s_log = -1;
+        if (s_log < 0) {
+            const char* e = getenv("ROGUESQ_LOG_HOOKS");
+            s_log = (e && *e && *e != '0') ? 1 : 0;
+        }
+        if (s_log) {
+            static int s_count = 0;
+            int n = ++s_count;
+            if (n <= 4 || (n & 127) == 0) {
+                extern void rs64_dbg_log4(const char* tag, unsigned a, unsigned b, unsigned c, unsigned d);
+                // gate (0x800A6268): 0x800B0B28 < cutscene[0x44]-0xA
+                unsigned gateCtr = (unsigned)MEM_W(0XB28, S32(0X800B << 16));
+                unsigned cutscene  = (unsigned)MEM_W(0X1904, S32(0X800B << 16));
+                unsigned cuts_44 = 0;
+                if (cutscene >= 0x80000000u && cutscene < 0x80800000u) {
+                    cuts_44 = (unsigned)MEM_W(0X44, (int64_t)(int32_t)cutscene);
+                }
+                unsigned cineState = (unsigned)MEM_W(0X934, S32(0X800B << 16));
+                rs64_dbg_log4("cineLoopIter n gateCtr cuts44 cineState", n, gateCtr, cuts_44, cineState);
+            }
+        }
+    }
+}'''
+
+
+# Load-bearing inline-edit migration: hooks reproducing hand-edits that had no
+# hook, so regens rebuild the working build.
+
+# loadSndFiles samp-bank load hook was removed: hardware streams samp_SND from
+# the cartridge, and the plain generated loadSndFiles (cart ptr in r2) is
+# correct; a bulk RDRAM load screeched. Nothing to re-apply.
+
+
+# (1) waitForMusyXAudioTaskDone spins on 0x8014998A until musyxSynthFrame (VI
+#     retrace thread) clears it; ultramodern only switches threads at sync
+#     points, so the spin must yield or the retrace thread never runs.
+[[patches.hook]]
+func = "waitForMusyXAudioTaskDone"
+before_vram = 0x80091ED0
+text = '''{ osYieldThread_recomp(rdram, ctx); }'''
+
+# (2) The game frees DL chunks before waiting for SP-done, but RT64's parse may
+#     still be reading them. Wait for the in-flight parse first.
+[[patches.hook]]
+func = "reclaimDisplayListChunk"
+text = '''{ extern void rs64_wait_gfx_parse_yield(uint8_t*, recomp_context*); rs64_wait_gfx_parse_yield(rdram, ctx); }'''
+[[patches.hook]]
+func = "drainMeshReleaseQueue"
+text = '''{ extern void rs64_wait_gfx_parse_yield(uint8_t*, recomp_context*); rs64_wait_gfx_parse_yield(rdram, ctx); }'''
+[[patches.hook]]
+func = "heapFreeListInsert"
+text = '''{ extern void rs64_wait_gfx_parse_yield(uint8_t*, recomp_context*); rs64_wait_gfx_parse_yield(rdram, ctx); }'''
+
+# (3) Other paths also recycle chunks (bulk releases, inline free-list pops), so
+#     gate the start of a frame build: no chunk rewritten while RT64 walks the
+#     previous list.
+[[patches.hook]]
+func = "beginFrameDLChunk"
+text = '''{ extern void rs64_wait_gfx_parse_yield(uint8_t*, recomp_context*); rs64_wait_gfx_parse_yield(rdram, ctx); }'''
+[[patches.hook]]
+func = "emitFrameRdpInitDl"
+text = '''{ extern void rs64_wait_gfx_parse_yield(uint8_t*, recomp_context*); rs64_wait_gfx_parse_yield(rdram, ctx); }'''
+

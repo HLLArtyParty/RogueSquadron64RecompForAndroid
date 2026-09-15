@@ -47,7 +47,7 @@ A static recompilation of **Star Wars: Rogue Squadron** (N64, USA v1.0) built wi
 | **OS / GPU** | Windows 10+, Linux, or macOS 11+ with a D3D12, Vulkan, or Metal capable GPU |
 | **CMake** | 3.20+ |
 | **Compiler** | MSVC with the ClangCL toolset (Windows), Clang or GCC (Linux/macOS) |
-| **N64Recomp output** | `RecompiledFuncs/` generated from the companion [rogue_squadron64](https://github.com/MikeSemicolonD/rogue_squadron64) decomp (started by [Tmcg2](https://github.com/Tmcg2/rogue_squadron64)) |
+| **N64Recomp output** | `RecompiledFuncs/`, generated locally from the companion [rogue_squadron64](https://github.com/MikeSemicolonD/rogue_squadron64) decomp (started by [Tmcg2](https://github.com/Tmcg2/rogue_squadron64)) via the `regen_funcs` target |
 | **MIPS cross-compiler** *(optional)* | `mips64-elf-gcc` for the [`patches/` build](patches/README.md). Windows builds are at [n64-tools](https://github.com/n64-tools/gcc-toolchain-mips64/releases); the official LLVM Windows installers lack the MIPS backend. Default path `E:/mips-toolchain` (override with `-DMIPS_TOOLCHAIN_DIR`). Without it CMake warns and skips the patches build. |
 | **GNU make** *(optional)* | For `patches/Makefile`. `mingw32-make` works. |
 
@@ -64,29 +64,31 @@ cd RogueSquadron64Recomp
 
 `lib/` holds forks of [N64ModernRuntime](https://github.com/MikeSemicolonD/N64ModernRuntime) and [rt64](https://github.com/MikeSemicolonD/rt64). They are forked because Factor 5's custom microcode needs changes stock upstream would not take.
 
-### 2. Generate the recompiled C output
+### 2. Produce the decomp ELF
+
+The recompiler needs the ELF from the companion [rogue_squadron64](https://github.com/MikeSemicolonD/rogue_squadron64) decomp (checked out next to this repo):
 
 ```sh
 # In the rogue_squadron64 repo:
 splat split roguesquadron.yaml
 python tools/make_elf.py
-# In the N64Recomp repo:
-N64Recomp rogue_squadron.toml
 ```
 
-Output lands in `../N64Recomp/RecompiledFuncs/` relative to this repo. Only redo this step when the TOML or symbol names change.
-
-### 3. Configure and build
+### 3. Configure, generate the recompiled C, and build
 
 ```sh
 # Windows (Visual Studio + ClangCL). Debug is the tested configuration.
 cmake -B build -T ClangCL
+cmake --build build --config Debug --target regen_funcs   # generate RecompiledFuncs/ from your ROM
 cmake --build build --config Debug
 
 # Linux / macOS
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --target regen_funcs
 cmake --build build
 ```
+
+`regen_funcs` runs the recompiler (built from the `lib/N64ModernRuntime/N64Recomp` submodule) on `rogue_squadron.toml`, producing the gitignored `RecompiledFuncs/`. Re-run it when `rogue_squadron.toml`, the symbols, or the decomp ELF change; the next build picks up the new sources automatically.
 
 The binary is `build/Debug/RogueSquadron64Recomp.exe` (Windows) or `build/RogueSquadron64Recomp` (Linux/macOS). Host-side edits rebuild and link in well under a minute.
 
@@ -95,6 +97,20 @@ The binary is `build/Debug/RogueSquadron64Recomp.exe` (Windows) or `build/RogueS
 | `-DMIPS_TOOLCHAIN_DIR=path` | `E:/mips-toolchain` | Location of `mips64-elf-gcc` for `patches/` |
 | `-DROGUESQ_DX12_DEBUG=ON` | OFF | D3D12 debug layer (Debug builds only) |
 | `-DROGUESQ_NO_ITER_DEBUG=ON` | OFF | Disable MSVC debug iterators in `lib/rt64` for faster Debug runs |
+
+---
+
+## The recompiler config (`rogue_squadron.toml`)
+
+`rogue_squadron.toml` is the N64Recomp config: it names the input ROM/ELF and defines the override layer applied during `regen_funcs`. Three directives shape the generated output without hand-editing it:
+
+| Directive | Effect |
+|---|---|
+| `stubs = [...]` | Replace a function body with an empty no-op (RSP blobs, cache-instruction leaves, splat fragments) |
+| `[[patches.instruction]]` | Overwrite one instruction at a `vram` with a raw `value` (e.g. NOP a `cache` op or a busy-wait branch) |
+| `[[patches.hook]]` | Inject C at a function's entry or before a `vram` — guards, pacing, logging. Host helpers live in `src/main/hook_helpers.cpp` |
+
+Edit the toml, then re-run `regen_funcs` to apply. For larger game-logic overrides, write MIPS-side C in the [`patches/`](patches/README.md) build instead — see Patching below.
 
 ---
 
@@ -142,17 +158,6 @@ Recompiled game code (`RecompiledFuncs/`, generated) and hand-written overrides 
 **Audio.** MusyX drives SFX and music; samples stream from the cartridge via PI DMA as on hardware.
 
 **Patching.** Overrides live in [`patches/`](patches/) and as `[[patches.hook]]` entries in `rogue_squadron.toml`, never as hand edits to the generated `RecompiledFuncs/`, so regeneration is safe. The pattern follows [Zelda64Recomp](https://github.com/Zelda64Recomp/Zelda64Recomp/tree/dev/patches) but uses `mips64-elf-gcc` instead of clang. See [patches/README.md](patches/README.md).
-
----
-
-### Open work
-
-1. **Display-list desyncs** — about a dozen per run, typically garbage right after a material sub-DL returns. Root-cause with the DL spec and `f5_dl_walk.py`.
-2. **Model texturing** beyond the cinematic (the RT64-side texture/UV bug; the DL stream is byte-faithful to golden).
-3. **Attract-demo stability** — an intermittent freeze remains when the recorded demo destroys a structure (see [plans/jade-moon-demo-freeze-plan.md](plans/jade-moon-demo-freeze-plan.md)). The earlier Tatooine-demo freeze was fixed (an N64Recomp link-branch codegen bug, not the codec).
-4. **Retire the defensive KSEG0 pointer guards** — they never fire against hardware-golden runs; slated for removal via the TOML plus a regen.
-5. **Function renaming** of `func_8XXXXXXX` symbols (see [tools/rename/README.md](tools/rename/README.md)). Run `tools/rename/lint_toml_syms.py` after every batch.
-6. **Keyboard input.**
 
 ---
 

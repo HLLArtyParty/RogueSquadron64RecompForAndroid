@@ -77,4 +77,23 @@ inline bool log_sp_tasks() {
     return v;
 }
 
+// libultra VI shims: osViSetMode / osViSwapBuffer / osViSetXScale / osViSetYScale / osViBlack.
+// ROGUESQ_LOG_VI=1.
+inline bool log_vi() {
+    static const bool v = env_flag("ROGUESQ_LOG_VI");
+    return v;
+}
+
+// Thread lifecycle shims: osDestroyThread victim + queue check. ROGUESQ_LOG_THREADS=1.
+inline bool log_threads() {
+    static const bool v = env_flag("ROGUESQ_LOG_THREADS");
+    return v;
+}
+
+// Behaviour knobs, read at the call site. Unlike env_flag, ROGUESQ_LOG_ALL does not turn these on.
+inline const char* env_str(const char* name) { const char* v = std::getenv(name); return (v && *v) ? v : nullptr; }
+inline bool env_on(const char* name, bool def = false) { const char* v = env_str(name); return v ? (*v != '0') : def; }
+inline int env_int(const char* name, int def = 0) { const char* v = env_str(name); return v ? std::atoi(v) : def; }
+inline unsigned env_u32(const char* name) { const char* v = env_str(name); return v ? (unsigned)std::strtoul(v, nullptr, 0) : 0u; }
+
 } // namespace recomp::dbg

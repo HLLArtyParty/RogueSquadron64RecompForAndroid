@@ -1280,6 +1280,15 @@ static void poll_input() {
     }
 }
 
+// BOOT_TARGET: while the FrontEnd attract-title is up, the present hook sets this
+// so we inject the native START title-skip. Pulsed (~120ms on / off) because the
+// game's skip reads NEW button presses -- a held START would register only once.
+extern "C" volatile int g_boot_pulse_start;
+static inline uint16_t boot_start_pulse() {
+    if (!g_boot_pulse_start) return 0;
+    return ((SDL_GetTicks() % 240u) < 120u) ? N64_START_BUTTON : 0;
+}
+
 static bool get_n64_input(int controller_num, uint16_t* buttons, float* x, float* y) {
     if (controller_num != 0 || !controller) {
         // Fake-controller: report connected + neutral so headless runs clear the
@@ -1293,6 +1302,7 @@ static bool get_n64_input(int controller_num, uint16_t* buttons, float* x, float
                 // ~120ms START pulse every s_auto ms.
                 if ((t % (uint32_t)s_auto) < 120u) btn |= N64_START_BUTTON;
             }
+            btn |= boot_start_pulse();
             *buttons = btn; *x = 0.0f; *y = 0.0f;
             return true;
         }
@@ -1337,6 +1347,7 @@ static bool get_n64_input(int controller_num, uint16_t* buttons, float* x, float
     int16_t ay = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTY);
     *x = ax / 32767.0f;
     *y = -(ay / 32767.0f); // N64 Y is inverted vs SDL
+    btn |= boot_start_pulse();
     *buttons = btn;
     return true;
 }
@@ -1667,6 +1678,7 @@ static const CliFlag kCliFlags[] = {
     {"render-song",      "ROGUESQ_RENDER_SONG",      CliFlag::Value, "",  "",  "force a specific song key (0 = N64-logo music)"},
     {"fake-controller",  "ROGUESQ_FAKE_CONTROLLER",  CliFlag::Bool,  "1", "0", "fake a connected controller (headless runs)"},
     {"auto-start",       "ROGUESQ_AUTO_START",       CliFlag::Value, "",  "",  "pulse START after <ms> (headless runs)"},
+    {"boot-target",      "ROGUESQ_BOOT_TARGET",      CliFlag::Value, "",  "",  "skip the intro to a target: menu | demo:N (N=0-5)"},
 };
 
 static void print_cli_usage() {
