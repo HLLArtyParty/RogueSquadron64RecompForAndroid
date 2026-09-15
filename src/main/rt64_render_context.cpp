@@ -38,6 +38,7 @@ extern "C" uint8_t* g_rs64_parse_rdram;             // RDRAM snapshot for the cu
 // lib/rt64 F5 GBI
 extern "C" volatile unsigned g_most_drawn_fb;        // most-drawn color image and its width
 extern "C" volatile unsigned g_most_drawn_fb_width;
+extern "C" volatile unsigned long long g_most_drawn_fb_ms;
 // src/rsp/dpc_bridge.cpp
 extern "C" void rs64_dpc_get_cumulative_histogram(uint32_t out[64]);
 extern "C" uint32_t rs64_dpc_get_cumulative_fullsyncs();
@@ -552,6 +553,13 @@ private:
         if (!s_menufix || !g_most_drawn_fb) return;
         const uint32_t w = g_most_drawn_fb_width;
         if (w < 16 || w > 1024 || w == vi->VI_WIDTH_REG) return;
+        // Only redirect to a buffer that is still being drawn. The mission text crawl draws
+        // only triangles into a 640-wide buffer, so the texrect-based most-drawn value stays
+        // on the 512-wide hangar buffer and would black out the crawl. ROGUESQ_MENU_FIX_STALE_MS.
+        static const uint64_t s_stale_ms = [](){ uint32_t v = env_u32("ROGUESQ_MENU_FIX_STALE_MS"); return v ? v : 250u; }();
+        const uint64_t now_ms = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (now_ms - (uint64_t)g_most_drawn_fb_ms > s_stale_ms) return;
         static const bool s_log = env_on("ROGUESQ_LOG_MENU_FIX");
         static int s_logged = 0;
         if (s_log && s_logged++ < 200) {
@@ -837,9 +845,10 @@ private:
             for (int i = 0; i < 16; i++) any_nonzero |= app->core.RDRAM[origin + i];
         }
         fprintf(stderr,
-            "[vi] update_screen #%d origin=0x%08X width=%u status=0x%X v_current=%u nonzero=%d fs=%u pq.wc=%d wq.wc=%d\n",
+            "[vi] update_screen #%d origin=0x%08X width=%u status=0x%X v_current=%u nonzero=%d fs=%u pq.wc=%d wq.wc=%d drawn=0x%08X dw=%u\n",
             vi_count_, vi->VI_ORIGIN_REG, vi->VI_WIDTH_REG, vi->VI_STATUS_REG, vi->VI_V_CURRENT_LINE_REG,
-            any_nonzero != 0, rs64_dpc_get_cumulative_fullsyncs(), present_cursor(), workload_cursor());
+            any_nonzero != 0, rs64_dpc_get_cumulative_fullsyncs(), present_cursor(), workload_cursor(),
+            (unsigned)g_most_drawn_fb, (unsigned)g_most_drawn_fb_width);
         if ((vi_count_ & 255) == 0) {
             uint32_t hist[64];
             rs64_dpc_get_cumulative_histogram(hist);
