@@ -36,10 +36,6 @@ A static recompilation of **Star Wars: Rogue Squadron** (N64, USA v1.0) built wi
     <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture8.PNG"></td>
   </tr>
   <tr>
-    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture7.PNG"></td>
-    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture8.PNG"></td>
-  </tr>
-  <tr>
     <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture9.PNG"></td>
     <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture10.PNG"></td>
   </tr>
@@ -129,24 +125,32 @@ Put `rogue_squadron.z64` next to the executable and launch it. The ROM hash is c
 
 ## Controls
 
-Keyboard, mouse, and gamepad all work; no controller is required. Defaults:
+Keyboard, mouse, and gamepad all work; no controller is required. The keyboard
+defaults follow the PC version (*Rogue Squadron 3D*). Actions are for the game's
+default **Luke** controller setting; the other presets in Options rearrange them.
 
-| N64 | Action | Keyboard | Gamepad |
+| Action | Keyboard | N64 | Gamepad |
 | --- | --- | --- | --- |
-| Analog stick | Steer / bank | WASD / arrows | Left stick |
-| A | Fire lasers | Space | A |
-| B | Drop bombs | Left Shift | X |
-| Z | Brake | Left Ctrl | Left trigger |
-| R | Boost | E | Right shoulder |
-| L | Targeting computer | Q | Left shoulder |
-| D-Pad | Throttle / trim | Numpad 8/4/2/6 | D-Pad |
-| C-Up / C-Down | Cycle views | I / K | Y / B |
-| C-Left / C-Right | Roll | J / L | Back / Guide |
-| Start | Pause | Enter | Start |
+| Steer | Arrows (A / D turn) | Analog stick | Left stick |
+| Fire blasters | Space | B | X |
+| Fire secondary | Alt | C-Left | Back |
+| Fire mode | X | C-Down | B |
+| Thrust | W | A | A |
+| Brake | S | Z | Left trigger |
+| Roll | E | R | Right shoulder |
+| Special | F | C-Right | Guide |
+| Cockpit / standard / close view | F1 / F2 / F3 | D-Pad Up / Down / Right | D-Pad |
+| Switch view | F4 | L | Left shoulder |
+| Look around | F5 | C-Up | Y |
+| Drop camera | Z | D-Pad Left | D-Pad |
+| Menu confirm / back | Enter / Backspace | A / B | A / X |
+| Pause | Esc | Start | Start |
 
 **Mouse flight steering:** press the backtick key (`` ` ``) to toggle mouse
-capture — mouse motion then steers the craft, left/right click fire lasers /
-drop bombs. `Esc` releases capture.
+capture — mouse motion then steers the craft, left click fires blasters, right
+click fires the secondary weapon. `Esc` releases capture (and pauses).
+
+In Debug builds F1/F3/F4 also toggle RT64 developer tools.
 
 ### Rebinding controls
 
@@ -159,6 +163,17 @@ which you can also hand-edit.
 > In Debug builds (developer mode on by default) the RT64 inspector owns the
 > ImGui overlay, so press **F1** once before **F6**. Release builds open the
 > Controls window with **F6** directly.
+
+---
+
+## Status
+
+The first level (Ambush at Mos Eisley) is confirmed to be playable all the way through. There might be other edge cases during menu/level transition that might freeze on a black screen (usual solution is an OS yield)
+
+Issues:
+
+- Mouse input dropping out despite backtick toggle
+- Some particle effects don't play completely with the 2D quad animated sprite effects get culled, only displaying the ones with complex geometry.
 
 ---
 

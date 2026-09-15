@@ -96,31 +96,36 @@ Bindings default_bindings() {
     auto mb  = [](int c)  { return Source{ SourceKind::MouseButton, c, 0 }; };
     auto max = [](int c, int d) { return Source{ SourceKind::MouseAxis, c, (int8_t)d }; };
 
-    // --- Keyboard (arcade flight) ---
-    add(Target::StickUp,    key(SDL_SCANCODE_W));   add(Target::StickUp,    key(SDL_SCANCODE_UP));
-    add(Target::StickDown,  key(SDL_SCANCODE_S));   add(Target::StickDown,  key(SDL_SCANCODE_DOWN));
-    add(Target::StickLeft,  key(SDL_SCANCODE_A));   add(Target::StickLeft,  key(SDL_SCANCODE_LEFT));
-    add(Target::StickRight, key(SDL_SCANCODE_D));   add(Target::StickRight, key(SDL_SCANCODE_RIGHT));
-    add(Target::A,     key(SDL_SCANCODE_SPACE));    // fire
-    add(Target::B,     key(SDL_SCANCODE_LSHIFT));   // bombs/secondary
-    add(Target::Z,     key(SDL_SCANCODE_LCTRL));    // brake/target
-    add(Target::RTrig, key(SDL_SCANCODE_E));        // boost
-    add(Target::LTrig, key(SDL_SCANCODE_Q));        // targeting computer
-    add(Target::Start, key(SDL_SCANCODE_RETURN));
-    add(Target::CUp,   key(SDL_SCANCODE_I));
-    add(Target::CDown, key(SDL_SCANCODE_K));
-    add(Target::CLeft, key(SDL_SCANCODE_J));
-    add(Target::CRight,key(SDL_SCANCODE_L));
-    add(Target::DpadUp,   key(SDL_SCANCODE_KP_8));
-    add(Target::DpadDown, key(SDL_SCANCODE_KP_2));
-    add(Target::DpadLeft, key(SDL_SCANCODE_KP_4));
-    add(Target::DpadRight,key(SDL_SCANCODE_KP_6));
+    // --- Keyboard ---
+    // PC-port (Rogue Squadron 3D) layout, mapped through the game's default
+    // "Luke" controller preset (ROM table 0x9EA18).
+    add(Target::StickUp,    key(SDL_SCANCODE_UP));
+    add(Target::StickDown,  key(SDL_SCANCODE_DOWN));
+    add(Target::StickLeft,  key(SDL_SCANCODE_LEFT));  add(Target::StickLeft,  key(SDL_SCANCODE_A));
+    add(Target::StickRight, key(SDL_SCANCODE_RIGHT)); add(Target::StickRight, key(SDL_SCANCODE_D));
+    add(Target::A,     key(SDL_SCANCODE_W));        // thrust
+    add(Target::A,     key(SDL_SCANCODE_RETURN));   // menu confirm
+    add(Target::B,     key(SDL_SCANCODE_SPACE));    // fire blasters
+    add(Target::B,     key(SDL_SCANCODE_BACKSPACE));// menu back
+    add(Target::Z,     key(SDL_SCANCODE_S));        // brake
+    add(Target::RTrig, key(SDL_SCANCODE_E));        // roll
+    add(Target::CLeft, key(SDL_SCANCODE_LALT));     // fire secondary
+    add(Target::CLeft, key(SDL_SCANCODE_RALT));
+    add(Target::CDown, key(SDL_SCANCODE_X));        // fire mode
+    add(Target::CRight,key(SDL_SCANCODE_F));        // special
+    add(Target::Start, key(SDL_SCANCODE_ESCAPE));   // pause
+    add(Target::DpadUp,   key(SDL_SCANCODE_F1));    // cockpit view
+    add(Target::DpadDown, key(SDL_SCANCODE_F2));    // standard view
+    add(Target::DpadRight,key(SDL_SCANCODE_F3));    // close view
+    add(Target::LTrig,    key(SDL_SCANCODE_F4));    // switch view
+    add(Target::CUp,      key(SDL_SCANCODE_F5));    // look around
+    add(Target::DpadLeft, key(SDL_SCANCODE_Z));     // drop camera
 
     // --- Mouse (flight steering) ---
     add(Target::StickRight, max(0, +1)); add(Target::StickLeft, max(0, -1));
     add(Target::StickDown,  max(1, +1)); add(Target::StickUp,   max(1, -1));  // SDL y-down -> N64 up
-    add(Target::A, mb(SDL_BUTTON_LEFT));
-    add(Target::B, mb(SDL_BUTTON_RIGHT));
+    add(Target::B,     mb(SDL_BUTTON_LEFT));        // fire blasters
+    add(Target::CLeft, mb(SDL_BUTTON_RIGHT));       // fire secondary
 
     // --- Gamepad (mirrors the prior hardcoded map) ---
     add(Target::A,     pb(SDL_CONTROLLER_BUTTON_A));
@@ -330,7 +335,6 @@ bool load_bindings(Bindings& b, const std::string& path) {
 
 bool save_bindings(const Bindings& b, const std::string& path) {
     json j;
-    j["version"] = 1;
     j["mouse"] = { {"sensitivity", b.mouse_sensitivity},
                    {"invert_x", b.mouse_invert_x}, {"invert_y", b.mouse_invert_y} };
     j["keyboard_enabled"] = b.keyboard_enabled;
