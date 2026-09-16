@@ -57,9 +57,6 @@ extern "C" int rs64_boot_target_level(int* craft_out) {
 
 extern "C" volatile int g_current_scene = -1;      // menuOverlayInit action id; 9 = attribution
 extern "C" volatile unsigned g_op_bf_count = 0;    // bumped by the F5 GBI per explosion-bloom tri
-extern "C" volatile unsigned g_flipbook_b4_count = 0;  // F5 GBI: RGBA32 (fmt0 siz3) faces emitted = flipbook quads
-extern "C" volatile unsigned g_face_copyskip = 0;  // F5 GBI: textured faces skipped by the G_CYC_COPY guard
-extern "C" volatile unsigned g_face_idxskip = 0;   // F5 GBI: textured faces skipped by the stale-index guard
 
 // ROGUESQ_LOG_HOOKS=1: stderr for hook code.
 extern "C" void rs64_dbg_log4(const char* tag, unsigned a, unsigned b, unsigned c, unsigned d) {
@@ -73,56 +70,6 @@ extern "C" void rs64_dbg_log4(const char* tag, unsigned a, unsigned b, unsigned 
 #endif
     fprintf(stderr, "[hook t=%ums] %s a=0x%08X b=0x%08X c=0x%08X d=0x%08X\n", ms, tag ? tag : "?", a, b, c, d);
     fflush(stderr);
-}
-
-// ROGUESQ_EFFECT_PROBE: instrument the oriented-effect (explosion flipbook) path to split
-// b1 (instantiate fails -> sprites die) from b2 (survive but no quad emitted). Hooks live
-// inside orientedNpcHandler (func_8006FC90) so counts are scoped to that path.
-//   which=0 init reached instantiateNamedMeshInstance; a = returned mesh ptr (0 => b1)
-//   which=1 per-tick material swap ran (sprite survived to tick)
-//   which=2 reached addNpcToVisibilityBucket (queued for render)
-// The F5 GBI bumps g_flipbook_b4_count per RGBA32 face emitted (= flipbook quad reaching the GPU).
-// See plans/oriented-effect-flipbook-plan.md.
-extern "C" void rs64_effect_probe(unsigned which, unsigned a) {
-    static const bool on = env_on("ROGUESQ_EFFECT_PROBE");
-    if (!on) return;
-    static std::atomic<unsigned> s_init{0}, s_meshnull{0}, s_swap{0}, s_queue{0};
-    static std::atomic<int> s_alive{0}, s_peak{0};
-    bool report = false;
-    switch (which) {
-        case 0: { s_init++; if (a == 0) s_meshnull++; int c = ++s_alive; int p = s_peak.load(); while (c > p && !s_peak.compare_exchange_weak(p, c)) {} report = true; break; }  // spawn; a=mesh ptr
-        case 3: if (s_alive.load() > 0) --s_alive; break;  // destroyNpcSlotByIndex: sprite died
-        case 1: {  // per-tick material swap; a = new material id written to the flipbook faces (table[frame])
-            s_swap++;
-            static int s_n = 0;
-            if (s_n < 16) { ++s_n; fprintf(stderr, "[effect-probe] swap materialId=0x%04X\n", a & 0xFFFF); fflush(stderr); }
-            // On the first swap, dump the HMT texture count + the flipbook id tables from OUR RDRAM,
-            // to test whether the 0x8D..0x94 material ids resolve to registered textures.
-            static bool s_dumped = false;
-            if (!s_dumped) {
-                s_dumped = true;
-                const uint8_t* rd = (const uint8_t*)g_recomp_rdram_for_wp_raw;
-                if (rd) {
-                    auto u32 = [&](unsigned g){ unsigned p=g&0x1FFFFFFF; return (unsigned)((rd[(p)^3]<<24)|(rd[(p+1)^3]<<16)|(rd[(p+2)^3]<<8)|rd[(p+3)^3]); };
-                    auto u16 = [&](unsigned g){ unsigned p=g&0x1FFFFFFF; return (unsigned)((rd[(p)^3]<<8)|rd[(p+1)^3]); };
-                    fprintf(stderr, "[effect-probe] HMT count@0x8011A8B4=%u ptr@0x8011A444=0x%08X\n", u32(0x8011A8B4), u32(0x8011A444));
-                    const char* names[3] = {"explo2 @139870","explo2hi @139898","ionexp @139900"};
-                    unsigned bases[3] = {0x80139870,0x80139898,0x80139900};
-                    for (int t=0;t<3;t++){ fprintf(stderr,"[effect-probe] %s:",names[t]); for(int i=0;i<18;i++) fprintf(stderr," %04X",u16(bases[t]+2*i)); fprintf(stderr,"\n"); }
-                    fflush(stderr);
-                }
-            }
-            report = (s_swap.load() % 200) == 0;
-            break;
-        }
-        case 2: s_queue++; report = (s_queue.load() % 50) == 0; break;
-        default: break;
-    }
-    if (report) {
-        fprintf(stderr, "[effect-probe] init=%u mesh_null=%u alive=%d peak_alive=%d tick_swap=%u queued=%u copyskip=%u idxskip=%u\n",
-            s_init.load(), s_meshnull.load(), s_alive.load(), s_peak.load(), s_swap.load(), s_queue.load(), g_face_copyskip, g_face_idxskip);
-        fflush(stderr);
-    }
 }
 
 // ---- Cinematic watchdog ----
