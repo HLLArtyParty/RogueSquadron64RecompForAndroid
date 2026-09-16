@@ -20,18 +20,18 @@ A static recompilation of **Star Wars: Rogue Squadron** (N64, USA v1.0) built wi
 
 <table>
   <tr>
-    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture1.PNG"></td>
-    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture2.PNG"></td>
-    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture3.PNG"></td>
-    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture4.PNG"></td>
-    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture5.PNG"></td>
+    <td><img src="./screenshots/progress2/Capture1.PNG"></td>
+    <td><img src="./screenshots/progress2/Capture2.PNG"></td>
+    <td><img src="./screenshots/progress2/Capture3.PNG"></td>
+    <td><img src="./screenshots/progress2/Capture4.PNG"></td>
+    <td><img src="./screenshots/progress2/Capture5.PNG"></td>
   </tr>
   <tr>
-    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture6.PNG"></td>
-    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture7.PNG"></td>
-    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture8.PNG"></td>
-    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture9.PNG"></td>
-    <td><img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/MikesBranch/screenshots/progress2/Capture10.PNG"></td>
+    <td><img src="./screenshots/progress2/Capture6.PNG"></td>
+    <td><img src="./screenshots/progress2/Capture7.PNG"></td>
+    <td><img src="./screenshots/progress2/Capture8.PNG"></td>
+    <td><img src="./screenshots/progress2/Capture9.PNG"></td>
+    <td><img src="./screenshots/progress2/Capture10.PNG"></td>
   </tr>
 </table>
 </div>
@@ -135,7 +135,8 @@ default **Luke** controller setting; the other presets in Options rearrange them
 | Special | F | C-Right | Guide |
 | Cockpit / standard / close view | F1 / F2 / F3 | D-Pad Up / Down / Right | D-Pad |
 | Switch view | F4 | L | Left shoulder |
-| Look around | F5 | C-Up | Y |
+| Look around | F8 | C-Up | Y |
+| Profiler HUD | F5 | — | — |
 | Drop camera | Z | D-Pad Left | D-Pad |
 | Menu confirm / back | Enter / Backspace | A / B | A / X |
 | Pause | Esc | Start | Start |
@@ -162,12 +163,19 @@ which you can also hand-edit.
 
 ## Status
 
-The first level (Ambush at Mos Eisley) is confirmed to be playable all the way through. There might be other edge cases during menu/level transition that might freeze on a black screen (usual solution is an OS yield)
+The Ambush at Mos Eisley to Jade Moon is confirmed to be playable all the way through.
+
+There might be other edge cases during menu/level transition that might freeze on a black screen (usual a race condition. The solution is *usually* an OS yield)
 
 Issues:
 
-- Mouse input dropping out despite backtick toggle
 - Some particle effects don't play completely with the 2D quad animated sprite effects get culled, only displaying the ones with complex geometry.
+	- *The sound that's usually paired with these effects also doesn't play*
+
+- Mouse input dropping out despite backtick toggle.
+- Missing/culled quad on underside of the x-wing's s-foils.
+- Random crashes after long play sessions which are probably from memory filling up via debug variables/maps/arrays. (Needs **serious** cleanup)
+- Cutscenes having screen sizes of varying widths which could genuinely be an issue with the game itself.
 
 ---
 
@@ -183,9 +191,9 @@ Recompiled game code (`RecompiledFuncs/`, generated) and hand-written overrides 
 | `src/main/upstream_compat.cpp` | libultra shims, overlay loader, HMT-load capture |
 | `lib/rt64/src/gbi/rt64_gbi_f3dfactor5.cpp` | The Factor 5 GBI module (the render core) |
 | `patches/` | Game-function overrides, cross-compiled to MIPS |
-| `src/rsp/`, `*_rsp.toml` | RSPRecomp configs and DPC bridge for the opt-in LLE path |
+| `src/rsp/`, `*_rsp.toml` | RSPRecomp configs and the DPC bridge that forwards the Factor 5 ucode's RDP bytes into RT64 |
 
-**Graphics.** Rogue Squadron uses Factor 5's own display-list format, which stock RT64 cannot parse; the forked RT64 carries a GBI module for it. `M_GFXTASK` goes straight to RT64's HLE processor, which emits native RT64 geometry. The grammar is in [docs/f5-model-dl-spec.md](docs/f5-model-dl-spec.md) and validated offline against Project64 dumps with `tools/validate/f5_dl_walk.py`. The original LLE path (RSP ucode via RSPRecomp, RDP bytes through `dpc_bridge.cpp`) is kept behind `ROGUESQ_LLE_FORCE=1`.
+**Graphics.** Rogue Squadron uses Factor 5's own display-list format, which stock RT64 cannot parse; the forked RT64 carries a GBI module for it. `M_GFXTASK` goes straight to RT64's HLE processor, which emits native RT64 geometry. The grammar is in [docs/f5-model-dl-spec.md](docs/f5-model-dl-spec.md) and validated offline against Project64 dumps with `tools/validate/f5_dl_walk.py`. The recompiled RSP ucode (RSPRecomp) forwards its RDP bytes into RT64 through `dpc_bridge.cpp`.
 
 **Frame pacing.** By default the game's own VI / SP / DP message protocol runs as on hardware, with SP-done delivered after RT64 parses the list. `--no-vi-driven-loop` (`ROGUESQ_VI_DRIVEN_LOOP=0`) restores the older host-paced loop.
 
@@ -227,6 +235,20 @@ Run `RogueSquadron64Recomp.exe --help` for the full list. The common options:
 Each option maps to a `ROGUESQ_*` environment variable, which still works (a bare `NAME=VALUE` argument does too). The full debug/trace/experiment catalog — logging categories, DL/texture dumps, message-order traces, and rendering A/B toggles — lives in [docs/debug-trace-env-vars.md](docs/debug-trace-env-vars.md); reach any of those from the command line with `--set NAME=VALUE`.
 
 With the inspector enabled, F1 toggles RT64's ImGui overlay (configuration, texture dumping, per-call debugger, render-target view). F3 toggles ViewRDRAM mode and F4 toggles texture replacement, or pauses the debugger while an inspector window is focused.
+
+**F5** toggles Factor 5's own built-in frame-profiler HUD (a dormant retail feature, gated by one RDRAM byte). Bars: yellow = CPU (frame submit), blue = RSP/geometry, red = RDP total; magenta/white/green are the RDP command/raster/texture breakdown, fed genuine RT64 workload proxies (draw calls / triangles / texture loads) since the PC path has no RDP hardware counters — scale them with `ROGUESQ_DRAW_SCALE` / `ROGUESQ_TRIS_SCALE` / `ROGUESQ_TEX_SCALE`. `ROGUESQ_PROFILER_DUMP=1` logs the raw slot values.
+
+<img src="E:\Projects\RogueSquadron64Recomp\docs\ProfilerBars.PNG">
+
+- Blue bar    = render/geometry cost (RSP + display-list processing)
+- Red bar     = rasterization/fill cost (RDP)
+- Yellow Bar  = CPU; it grows toward full width as a scene exceeds 'frame budget'.
+- Magenta Bar = RDP* cmd-buffer busy (DPC_BUFBUSY) -> draw-call count (per State::flush)
+- White Bar   = RDP* pipe busy (DPC_PIPEBUSY)      -> drawCall.triangleCount
+- Green Bar   = RDP* TMEM busy (DPC_TMEM)          -> drawCall.loadCount
+- Cyan Bar    = Not used
+
+*The recomp re-uses the RDP bars by basing them on the draw calls from rt64 (It's an approximation that is not representative of how DPC performs on actual hardware)
 
 ---
 

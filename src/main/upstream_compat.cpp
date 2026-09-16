@@ -70,8 +70,6 @@ extern "C" void rs64_load_overlay(unsigned int overlay_id) {
         default: break;
     }
     if (overlay_id <= 2) g_active_overlay = (int)overlay_id;
-    static const bool s_log = env_on("ROGUESQ_LOG_OVERLAY");
-    if (s_log) { fprintf(stderr, "[overlay] loadOverlay(%u)\n", overlay_id); fflush(stderr); }
 }
 
 // ---- Stubs ----
@@ -81,9 +79,32 @@ extern "C" void __osContRamWrite_recomp(uint8_t* /*rdram*/, recomp_context* ctx)
 extern "C" void __osPfsSelectBank_recomp(uint8_t* /*rdram*/, recomp_context* ctx) { _return<s32>(ctx, 1); }  // PFS_ERR_NOPACK
 extern "C" void osViGetCurrentField_recomp(uint8_t* /*rdram*/, recomp_context* ctx) { ctx->r2 = 0; }
 
+// Per-frame RT64 workload counts (lib/rt64 rt64_state.cpp), read-and-cleared here.
+extern "C" std::atomic<uint32_t> g_rs64_frame_tris;
+extern "C" std::atomic<uint32_t> g_rs64_frame_draws;
+extern "C" std::atomic<uint32_t> g_rs64_frame_texloads;
+
 extern "C" void osDpGetCounters_recomp(uint8_t* rdram, recomp_context* ctx) {
     gpr buf_ptr = ctx->r4;   // full gpr so the sign-extended address survives MEM_W
     for (int i = 0; i < 8; i++) MEM_W(i * 4, buf_ptr) = 0;
+
+    // No real RDP on the PC path, so feed the F5 profiler HUD's three RDP slots
+    // genuine RT64 workload proxies (counts since last frame). buf[1/2/3] are the
+    // struct's +0x14/+0x18/+0x1C fields submitGfxFrame scales into the HUD.
+    static int ts = -1, ds = -1, xs = -1;
+    if (ts < 0) { const char* s = getenv("ROGUESQ_TRIS_SCALE"); ts = (s && *s) ? atoi(s) : 64; }
+    if (ds < 0) { const char* s = getenv("ROGUESQ_DRAW_SCALE"); ds = (s && *s) ? atoi(s) : 256; }
+    if (xs < 0) { const char* s = getenv("ROGUESQ_TEX_SCALE");  xs = (s && *s) ? atoi(s) : 256; }
+    uint32_t tris     = g_rs64_frame_tris.exchange(0, std::memory_order_relaxed);
+    uint32_t draws    = g_rs64_frame_draws.exchange(0, std::memory_order_relaxed);
+    uint32_t texloads = g_rs64_frame_texloads.exchange(0, std::memory_order_relaxed);
+    uint32_t magv = draws * (uint32_t)ds;
+    // submitGfxFrame reads these as cumulative counters: white = buf[2] - magenta.
+    // Add magenta back into buf[2] so the delta resolves to exactly the tri proxy
+    // (magenta and green are read directly, no subtraction).
+    MEM_W(1 * 4, buf_ptr) = (int32_t)(magv);                            // magenta: cmd/draw load
+    MEM_W(2 * 4, buf_ptr) = (int32_t)(tris * (uint32_t)ts + magv);      // white:   pipe/raster load
+    MEM_W(3 * 4, buf_ptr) = (int32_t)(texloads * (uint32_t)xs);         // green:   tmem/texture load
 }
 
 // The game calls osViBlack(1) twice at boot and never osViBlack(0); honouring it would leave
@@ -332,13 +353,6 @@ extern "C" void osRecvMesg_recomp(uint8_t* rdram, recomp_context* ctx) {
     static const bool s_nb = env_on("ROGUESQ_GFX_BARRIER_NOBLOCK", true);
     if (s_nb && !rs64_vi_driven() && (q == 0x8011A7E8u || q == 0x8011A818u)) flags = 0;   // OS_MESG_NOBLOCK
     rs64_mesg_trace(rdram, "recv", q, (int)(s32)ctx->r6, (uint32_t)ctx->r31, (int)flags);
-    // ROGUESQ_LOG_RECV_BLOCK=1: BLOCK receives on an empty queue and how long they took.
-    static const bool s_rb = env_on("ROGUESQ_LOG_RECV_BLOCK");
-    std::chrono::steady_clock::time_point t0{}; bool empty = false;
-    if (s_rb && flags != 0 && q >= 0x80000000u && q < 0x80800000u) {
-        empty = (*reinterpret_cast<uint32_t*>(rdram + ((q & 0x7FFFFFu) + 8)) == 0);   // validCount
-        if (empty) { t0 = std::chrono::steady_clock::now(); fprintf(stderr, "[recv-block] q=0x%08X waiting (empty)\n", q); fflush(stderr); }
-    }
     ctx->r2 = osRecvMesg(rdram, (int32_t)ctx->r4, (int32_t)ctx->r5, flags);
     // Frame start (video queue 0x80128CF0): the game is about to rebuild the chunks of the buffer
     // slot it just got back. On hardware the RSP finished reading them long ago; RT64's parse may
@@ -362,10 +376,6 @@ extern "C" void osRecvMesg_recomp(uint8_t* rdram, recomp_context* ctx) {
         int type = (mv >= 0x80000000u && mv < 0x80800000u) ? rdram[(mv & 0x7FFFFFu) ^ 3] : -1;
         rs64_mesg_trace(rdram, "recvret", q, type, mv);
     }
-    if (empty) {
-        auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
-        if (dt > 200) { fprintf(stderr, "[recv-block] q=0x%08X resumed after %lld ms\n", q, (long long)dt); fflush(stderr); }
-    }
 }
 
 extern "C" int32_t osSendMesg(uint8_t* rdram, int32_t mq_, OSMesg mesg, s32 flag);
@@ -383,32 +393,7 @@ extern "C" void osSendMesg_recomp(uint8_t* rdram, recomp_context* ctx) {
             if (s_lg && ++s_n <= 6) { fprintf(stderr, "[gfx-request #%u] ra=0x%08X\n", s_n, (uint32_t)ctx->r31); fflush(stderr); }
         }
     }
-    // ROGUESQ_LOG_SENDMESG_STACK=1: host stack for the first sends to the SP scheduler queue.
-    static const bool s_stk = env_on("ROGUESQ_LOG_SENDMESG_STACK");
-    if (s_stk && (uint32_t)ctx->r4 == 0x8011A420u) {
-        static int s_count = 0;
-        if (++s_count <= 3) {
-            fprintf(stderr, "[sendmesg #%d] mq=0x%08X mesg_ptr=0x%08X flag=%d\n", s_count, (uint32_t)ctx->r4, (unsigned)ctx->r5, (int)ctx->r6);
-            void* frames[24];
-            unsigned short count = RtlCaptureStackBackTrace(0, 24, frames, nullptr);
-            print_stack_with_symbols(frames, count);
-            fflush(stderr);
-        }
-    }
-    // ROGUESQ_LOG_RECV_BLOCK=1 also reports BLOCK sends to a full queue.
-    static const bool s_sb = env_on("ROGUESQ_LOG_RECV_BLOCK");
-    const uint32_t sq = (uint32_t)ctx->r4;
-    std::chrono::steady_clock::time_point t0{}; bool full = false;
-    if (s_sb && (s32)ctx->r6 != 0 && sq >= 0x80000000u && sq < 0x80800000u) {
-        const uint32_t* mq = reinterpret_cast<const uint32_t*>(rdram + (sq & 0x7FFFFFu));
-        full = (mq[2] >= mq[4]);   // validCount >= msgCount
-        if (full) { t0 = std::chrono::steady_clock::now(); fprintf(stderr, "[send-block] q=0x%08X waiting (full)\n", sq); fflush(stderr); }
-    }
     ctx->r2 = osSendMesg(rdram, (int32_t)ctx->r4, (OSMesg)ctx->r5, (s32)ctx->r6);
-    if (full) {
-        auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
-        if (dt > 200) { fprintf(stderr, "[send-block] q=0x%08X resumed after %lld ms\n", sq, (long long)dt); fflush(stderr); }
-    }
 }
 
 // ---- RSP tasks ----
@@ -448,27 +433,10 @@ static void rs64_check_chunk_freelist(uint8_t* rdram) {
 }
 
 // ROGUESQ_LOG_TASKSUBMIT=1: every GFX task plus a sample of audio tasks, with the first DL bytes.
-// ROGUESQ_LOG_TASKSUBMIT_STACK=1: host stack for the first GFX and first audio submit.
 // Factor 5 ignores data_size (the DL chains through G_DL), so data_size=0 is normal.
 extern "C" void osSpTaskStartGo_recomp(uint8_t* rdram, recomp_context* ctx) {
     rs64_check_chunk_freelist(rdram);
     static const bool s_log = env_on("ROGUESQ_LOG_TASKSUBMIT");
-    static const bool s_log_stk = env_on("ROGUESQ_LOG_TASKSUBMIT_STACK");
-    if (s_log_stk) {
-        OSTask* task = TO_PTR(OSTask, ctx->r4);
-        static bool s_logged_gfx = false, s_logged_audio = false;
-        const bool is_gfx = (task->t.type == 1u), is_audio = (task->t.type == 2u);
-        if ((is_gfx && !s_logged_gfx) || (is_audio && !s_logged_audio)) {
-            if (is_gfx) s_logged_gfx = true;
-            if (is_audio) s_logged_audio = true;
-            fprintf(stderr, "[task-submit-stack] type=0x%X data_ptr=0x%08X ucode=0x%08X\n",
-                    (unsigned)task->t.type, (unsigned)task->t.data_ptr, (unsigned)task->t.ucode);
-            void* frames[24];
-            unsigned short count = RtlCaptureStackBackTrace(0, 24, frames, nullptr);
-            print_stack_with_symbols(frames, count);
-            fflush(stderr);
-        }
-    }
     if (s_log) {
         OSTask* task = TO_PTR(OSTask, ctx->r4);
         static int n = 0;

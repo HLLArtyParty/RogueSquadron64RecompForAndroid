@@ -497,28 +497,6 @@ static RspExitReason factor5_gfx_runner(uint8_t* rdram, uint32_t ucode_addr) {
             s_udata_snap.assign(dmem, dmem + ucode_data_size);
         }
     }
-    // Diagnostic: log re-DMA params + DMEM[0..0x10] after the copy.
-    {
-        static int s_log = -1;
-        if (s_log < 0) {
-            const char* e = std::getenv("ROGUESQ_LOG_SPBOOT");
-            s_log = (e && *e && *e != '0') ? 1 : 0;
-        }
-        if (s_log) {
-            static int s_n = 0;
-            ++s_n;
-            if (s_n <= 4) {
-                fprintf(stderr,
-                    "[spboot] task #%d ucode_data=0x%08X size=0x%X DMEM[0..0x10]:",
-                    s_n, ucode_data_addr, ucode_data_size);
-                for (int i = 0; i < 0x10; ++i) {
-                    fprintf(stderr, " %02X", dmem[i ^ 3]);
-                }
-                fprintf(stderr, "\n");
-                fflush(stderr);
-            }
-        }
-    }
 
     // Boot exits via UnhandledJumpTarget on its `jr $7=0x1080` (jumping into
     // the main ucode it just DMA'd to IMEM 0x80) — that's expected.
@@ -570,27 +548,6 @@ static RspExitReason factor5_gfx_runner(uint8_t* rdram, uint32_t ucode_addr) {
         // 0 RDP work emitted. Reset to 0x18 (3 stack entries) at task start.
         dmem[0x152 ^ 3] = 0x18;
         dmem[0x153 ^ 3] = 0;     // L_1DB0 also clears 0x53($18)
-
-        // Diagnostic: dump first 16 DMEM bytes at the dispatch start so we
-        // can see what opcode the first iter is dispatching on per task.
-        static int s_dump = -1;
-        if (s_dump < 0) {
-            const char* e = std::getenv("ROGUESQ_LOG_DMEM_DL");
-            s_dump = (e && *e && *e != '0') ? 1 : 0;
-        }
-        if (s_dump) {
-            static int s_n = 0;
-            ++s_n;
-            if (s_n <= 8) {
-                fprintf(stderr, "[dl] task #%d dl_ptr=0x%08X DMEM[0x178..0x190]:",
-                        s_n, dl_ptr);
-                for (int i = 0x178; i < 0x190; ++i) {
-                    fprintf(stderr, " %02X", dmem[i ^ 3]);
-                }
-                fprintf(stderr, "\n");
-                fflush(stderr);
-            }
-        }
     } else {
         poke_be32(0x654, 0x270);
     }
@@ -604,75 +561,7 @@ static RspExitReason factor5_gfx_runner(uint8_t* rdram, uint32_t ucode_addr) {
                 s_runner_step_log, (int)r);
         fflush(stderr);
     }
-    {
-        static int s_log = -1;
-        if (s_log < 0) {
-            const char* e = std::getenv("ROGUESQ_LOG_RUNNER");
-            s_log = (e && *e && *e != '0') ? 1 : 0;
-        }
-        if (s_log) {
-            static int s_n = 0;
-            ++s_n;
-            if (s_n <= 8 || (s_n & 31) == 0) {
-                // Pull the dpc_bridge per-task RDP-opcode histogram (raw 6-bit
-                // RDP opcodes, NOT the F3D DL byte). 0x08-0x0F = triangle
-                // variants; 0x24/0x25 = TEXRECT/TEXRECT_FLIP; 0x29 = SYNC_FULL;
-                // 0x36 = FILL_RECTANGLE; 0x3E/0x3F = SET_DEPTH/COLOR_IMAGE.
-                uint32_t hist[64];
-                rs64_dpc_drain_histogram(hist);
-                uint32_t tris = 0;
-                for (int i = 0x08; i <= 0x0F; ++i) tris += hist[i];
-                fprintf(stderr,
-                        "[runner] task #%d exit=%d dl_ptr=0x%08X tris=%u texrects=%u fillrects=%u syncs=%u cimg=%u depth=%u\n",
-                        s_n, (int)r, dl_ptr,
-                        tris, hist[0x24] + hist[0x25], hist[0x36],
-                        hist[0x29], hist[0x3F], hist[0x3E]);
-                fflush(stderr);
-            }
-        }
-    }
     return r;
-}
-
-// Public entry point for the LLE GFX path — used by the renderer's send_dl
-// callback when ROGUESQ_LLE_FORCE=1. Sets the pending-task statics that
-// factor5_gfx_runner reads, writes the OSTask struct to DMEM[0xFC0..0x1000]
-// (real SP_BOOT does this DMA-style; the runner mimics SP_BOOT but skips
-// this step), then invokes the LLE runner.
-extern "C" int rs64_run_lle_gfx(uint8_t* rdram, const OSTask* task) {
-    s_pending_task_data_ptr        = (uint32_t)task->t.data_ptr;
-    s_pending_task_ucode_data      = (uint32_t)task->t.ucode_data;
-    s_pending_task_ucode_data_size = (uint32_t)task->t.ucode_data_size;
-
-    // Write OSTask to DMEM[0xFC0..0x1000] in big-endian byte order via the
-    // i^3 swizzle (matching RSP_MEM_W_LOAD's encoding). The ucode reads
-    // task fields from this region via DMEM[r18+offset] where r18 = 0xFC0.
-    // OSTask is 0x40 bytes: type/flags/ucode_boot/ucode_boot_size/ucode/
-    // ucode_size/ucode_data/ucode_data_size/dram_stack/dram_stack_size/
-    // output_buff/output_buff_size/data_ptr/data_size/yield_data_ptr/yield_data_size.
-    auto poke = [](uint32_t off, uint32_t val) {
-        for (int j = 0; j < 4; ++j) {
-            dmem[(off + j) ^ 3] = (uint8_t)(val >> (24 - j * 8));
-        }
-    };
-    poke(0xFC0 + 0x00, (uint32_t)task->t.type);
-    poke(0xFC0 + 0x04, (uint32_t)task->t.flags);
-    poke(0xFC0 + 0x08, (uint32_t)task->t.ucode_boot);
-    poke(0xFC0 + 0x0C, (uint32_t)task->t.ucode_boot_size);
-    poke(0xFC0 + 0x10, (uint32_t)task->t.ucode);
-    poke(0xFC0 + 0x14, (uint32_t)task->t.ucode_size);
-    poke(0xFC0 + 0x18, (uint32_t)task->t.ucode_data);
-    poke(0xFC0 + 0x1C, (uint32_t)task->t.ucode_data_size);
-    poke(0xFC0 + 0x20, (uint32_t)task->t.dram_stack);
-    poke(0xFC0 + 0x24, (uint32_t)task->t.dram_stack_size);
-    poke(0xFC0 + 0x28, (uint32_t)task->t.output_buff);
-    poke(0xFC0 + 0x2C, (uint32_t)task->t.output_buff_size);
-    poke(0xFC0 + 0x30, (uint32_t)task->t.data_ptr);
-    poke(0xFC0 + 0x34, (uint32_t)task->t.data_size);
-    poke(0xFC0 + 0x38, (uint32_t)task->t.yield_data_ptr);
-    poke(0xFC0 + 0x3C, (uint32_t)task->t.yield_data_size);
-
-    return (int)factor5_gfx_runner(rdram, (uint32_t)task->t.ucode);
 }
 
 RspUcodeFunc* get_rsp_microcode(const OSTask* task) {
@@ -1022,46 +911,6 @@ static void start_state_poller() {
     t.detach();
 }
 
-// Periodic poll of MEM[0x80130B50] (the inner-loop transition gate). Reports
-// changes so we can see WHO writes it and what bits flip. Gated by
-// ROGUESQ_LOG_B50=1.
-static void start_b50_poller() {
-    if (!std::getenv("ROGUESQ_LOG_B50")) return;
-    static std::thread t{[]{
-        uint8_t* rdram = nullptr;
-        while (!(rdram = (uint8_t*)g_recomp_rdram_for_wp_raw)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-        // RDRAM-relative offsets for KSEG0 0x80130B50 / 0x80130B58.
-        const uint32_t b50_off = 0x130B50;
-        const uint32_t b58_off = 0x130B58;
-        uint32_t prev_b50 = 0xFFFFFFFFu;
-        uint32_t prev_b58 = 0xFFFFFFFFu;
-        for (int i = 0; i < 1200; ++i) {  // ~60s @ 50ms
-            // Reads via byte XOR-3 to get BE word (RDRAM is host-LE-stored).
-            uint32_t b50 = (uint32_t(rdram[(b50_off + 0) ^ 3]) << 24) |
-                           (uint32_t(rdram[(b50_off + 1) ^ 3]) << 16) |
-                           (uint32_t(rdram[(b50_off + 2) ^ 3]) <<  8) |
-                            uint32_t(rdram[(b50_off + 3) ^ 3]);
-            uint32_t b58 = (uint32_t(rdram[(b58_off + 0) ^ 3]) << 24) |
-                           (uint32_t(rdram[(b58_off + 1) ^ 3]) << 16) |
-                           (uint32_t(rdram[(b58_off + 2) ^ 3]) <<  8) |
-                            uint32_t(rdram[(b58_off + 3) ^ 3]);
-            if (b50 != prev_b50 || b58 != prev_b58) {
-                fprintf(stderr, "[b50] t=%4d ms B50=0x%08X B58=0x%08X (b50.bit5=%d b50.b3=0x%02X b58.bit25=%d)\n",
-                        i * 50, b50, b58,
-                        (b50 >> 5) & 1, b50 & 0xFF,
-                        (b58 >> 25) & 1);
-                fflush(stderr);
-                prev_b50 = b50;
-                prev_b58 = b58;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-    }};
-    t.detach();
-}
-
 // Periodic poll of cinematic phase state so we can see stage transitions
 // and timing. Gated by ROGUESQ_LOG_PHASE=1. Reports on change only.
 //
@@ -1264,6 +1113,16 @@ static void poll_input() {
         if (e.type == SDL_KEYDOWN && e.key.repeat == 0) {
             if (e.key.keysym.scancode == SDL_SCANCODE_F6) {
                 g_show_controls.store(!g_show_controls.load());
+            } else if (e.key.keysym.scancode == SDL_SCANCODE_F5) {
+                // Toggle Factor 5's built-in frame-profiler/debug-text HUD.
+                // Gate byte at virtual 0x80038CE0 (retail leaves it 0); the
+                // emitter early-returns when zero. ^3 = N64 byte order.
+                if (uint8_t* rd = (uint8_t*)g_recomp_rdram_for_wp_raw) {
+                    uint8_t& gate = rd[0x38CE0 ^ 3];
+                    gate = gate ? 0 : 1;
+                    fprintf(stderr, "[F5] profiler HUD gate 0x80038CE0 -> %u\n", gate);
+                    fflush(stderr);
+                }
             } else if (e.key.keysym.scancode == SDL_SCANCODE_GRAVE) {
                 g_mouse_capture.store(!g_mouse_capture.load());
             } else if (e.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
@@ -1314,10 +1173,27 @@ static void poll_input() {
     if (g_mouse_capture.load()) {
         g_mouse_ax += (float)rdx;
         g_mouse_ay += (float)rdy;
-        g_mouse_btn = rbtn;
     } else {
         g_mouse_ax = g_mouse_ay = 0.0f;
-        g_mouse_btn = 0;
+    }
+    g_mouse_btn = rbtn;
+
+    // ROGUESQ_PROFILER_DUMP=1: sample the 7 F5-HUD timing slots (microseconds)
+    // so each bar can be labelled. Addresses are the absolute lw sources in
+    // drawFrameProfilerBars; words are stored host-order in the raw RDRAM buf.
+    static int s_prof_dump = -1;
+    if (s_prof_dump < 0) { const char* e2 = getenv("ROGUESQ_PROFILER_DUMP"); s_prof_dump = (e2 && *e2 != '0') ? 1 : 0; }
+    if (s_prof_dump) {
+        if (const uint8_t* rd = (const uint8_t*)g_recomp_rdram_for_wp_raw) {
+            auto W = [rd](uint32_t va) { return *reinterpret_cast<const uint32_t*>(rd + (va & 0x7FFFFF)); };
+            static int n = 0; ++n;
+            if (n % 15 == 0) {
+                fprintf(stderr, "[prof] yel=%u blu=%u red=%u mag=%u wht=%u grn=%u cyn=%u\n",
+                        W(0x8011A914), W(0x80128EE0), W(0x80128EDC),
+                        W(0x8011A920), W(0x8011DC54), W(0x8011DC4C), W(0x8011A918));
+                fflush(stderr);
+            }
+        }
     }
 }
 
@@ -1348,9 +1224,10 @@ static bool get_n64_input(int controller_num, uint16_t* buttons, float* x, float
     st.keys = SDL_GetKeyboardState(&st.keys_len);
     st.pad = controller;
     st.mouse_active = g_mouse_capture.load();
+    // Fire buttons only while steering; middle (Start) works in menus too.
+    st.mouse_buttons = st.mouse_active ? g_mouse_btn : (g_mouse_btn & SDL_BUTTON_MMASK);
     if (st.mouse_active) {
         st.mouse_dx = g_mouse_ax; st.mouse_dy = g_mouse_ay;
-        st.mouse_buttons = g_mouse_btn;
     }
     g_mouse_ax = g_mouse_ay = 0.0f;  // consume this frame's accumulated motion
 
@@ -1961,7 +1838,6 @@ int main(int argc, char* argv[]) {
     }
 #endif
 
-    start_b50_poller();
     start_state_poller();
     start_phase_poller();
 

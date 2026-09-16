@@ -31,7 +31,6 @@ extern "C" unsigned long long rs64_cine_iter_get(void);
 extern "C" volatile int g_boot_pulse_start;          // get_n64_input injects START while set
 extern "C" volatile int g_current_scene;
 // src/main/main.cpp
-extern "C" int rs64_run_lle_gfx(uint8_t* rdram, const OSTask* task);
 extern void print_stack_with_symbols(void** frames, unsigned short count);
 // ultramodern events.cpp
 extern "C" uint8_t* g_rs64_parse_rdram;             // RDRAM snapshot for the current parse
@@ -310,7 +309,6 @@ public:
 
     void send_dl(const OSTask* task) override {
         if (!app) return;
-        if (run_lle_task(task)) return;
         dump_ucode_once(task);
         log_task(task);
         run_hle_task(task);
@@ -368,29 +366,6 @@ private:
     }
 
     // ---- send_dl ----
-
-    // ROGUESQ_LLE_FORCE=1: diagnostic only. Runs the recompiled RSP ucode and feeds the RDP
-    // bytes through dpc_bridge. Gated to the attribution DL page (0x80720000) because cinematic
-    // tasks hit an unhandled jump in the recompiled ucode; ROGUESQ_LLE_UNGATED=1 lifts the gate,
-    // ROGUESQ_LLE_SOLO=1 skips the HLE pass. See AGENTS.md dead ends.
-    bool run_lle_task(const OSTask* task) {
-        static const bool s_force = env_on("ROGUESQ_LLE_FORCE");
-        if (!s_force) return false;
-        static const bool s_ungated = env_on("ROGUESQ_LLE_UNGATED");
-        static const bool s_solo = env_on("ROGUESQ_LLE_SOLO");
-        const uint32_t dlp = (uint32_t)task->t.data_ptr;
-        const bool in_attribution_page = ((dlp & 0xFFFF0000u) == 0x80720000u);
-        if (!s_ungated && !in_attribution_page) return false;
-        static int s_n = 0;
-        int n = ++s_n;
-        int r = rs64_run_lle_gfx(app->core.RDRAM, task);
-        if (n <= 8 || (n & 31) == 0) {
-            fprintf(stderr, "[lle send_dl #%d] gate=%s exit=%d ucode=0x%08X dl=0x%08X\n",
-                    n, in_attribution_page ? "attr" : "ungated", r, (unsigned)task->t.ucode, dlp);
-            fflush(stderr);
-        }
-        return s_solo;
-    }
 
     // ROGUESQ_DUMP_UCODE=path: one-shot IMEM + DMEM dump for offline disassembly.
     void dump_ucode_once(const OSTask* task) {

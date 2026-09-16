@@ -37,3 +37,9 @@ heap_bump           = 0x801163D4;
 
 /* npc_health_guard.c reads the health-table current-slot index. */
 npcHealthTableIndex = 0x80137CE4;
+
+/* npc_health_guard.c getNpcHealthPercentage scale constants (game rodata):
+ *   ScaleArray  -> the array-health (npc[0x1A7]==0) path
+ *   ScaleDirect -> the direct-value (npc[0x1A7]!=0) path */
+healthPctScaleArray  = 0x800A89D8;
+healthPctScaleDirect = 0x800A89DC;

@@ -272,7 +272,6 @@ add_executable(RogueSquadron64Recomp
     ${CMAKE_SOURCE_DIR}/src/main/hook_helpers.cpp
     ${CMAKE_SOURCE_DIR}/src/rsp/aspMain.cpp
     ${CMAKE_SOURCE_DIR}/src/rsp/dpc_bridge.cpp
-    ${CMAKE_SOURCE_DIR}/src/rsp/dpc_bridge_diag.cpp
     ${FACTOR5_BOOT_C}
     ${FACTOR5_UCODE_C}
     ${MUSYX_AUDIO_C}

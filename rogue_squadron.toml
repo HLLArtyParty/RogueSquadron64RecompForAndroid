@@ -16,6 +16,16 @@ manual_funcs = [
     { name = "func_8008ED70", section = ".text", vram = 0x8008ED70, size = 0x150 },
 ]
 
+# Size overrides. func_800E9AE0 (AT-PT/walker child health-init callback) ends in
+# a blez to 0x800E9BD4 inside the next function; at its ELF size (0x30) that branch
+# is out of bounds and the recompiler can't build it (was stubbed -> child spawned
+# with 0 health -> AT-PTs invincible). Extend it to absorb func_800E9B10 (0xE4) so
+# the branch is in-bounds. func_800E9B10 stays a standalone entry (called from
+# 0x800B58B8), i.e. a dual-entry function.
+function_sizes = [
+    { name = "func_800E9AE0", size = 0x114 },
+]
+
 [patches]
 stubs = [
     # Boot BSS-clear (bzero at top of main, base D_8010D200). Host RDRAM is
@@ -136,7 +146,6 @@ stubs = [
     "fake_func_800E71C8",
     "fake_func_800E8A34",
     "fake_func_800E9AD8",
-    "func_800E9AE0",  # branches outside function bounds to 0x800E9BD4, can't be compiled as-is
     "fake_func_800EC10C",
     "fake_func_800EC6EC",
     "fake_func_800ECE04",
@@ -579,6 +588,29 @@ text = '''{
 [[patches.hook]]
 func = "menuOverlayInit"
 text = '''{ extern void rs64_dbg_log4(const char*, unsigned, unsigned, unsigned, unsigned); rs64_dbg_log4("menuOverlayInit", (unsigned)ctx->r5, (unsigned)ctx->r6, 0, 0); extern volatile int g_current_scene; g_current_scene = (int)(unsigned)ctx->r5; }'''
+
+# ROGUESQ_EFFECT_PROBE: split b1/b2 for the missing explosion flipbook (oriented-effect path).
+# All three hooks sit inside orientedNpcHandler (func_8006FC90) so counts stay scoped to it.
+# Host impl rs64_effect_probe in hook_helpers.cpp. See plans/oriented-effect-flipbook-plan.md.
+[[patches.hook]]
+func = "orientedNpcHandler"
+before_vram = 0x8006FD68   # sw v0,0(s2): v0 = instantiateNamedMeshInstance result (0 => b1, mesh missing)
+text = '''{ extern void rs64_effect_probe(unsigned, unsigned); rs64_effect_probe(0, (unsigned)ctx->r2); }'''
+
+[[patches.hook]]
+func = "orientedNpcHandler"
+before_vram = 0x8006FF48   # jal setMaterialFlagByIdInMeshTree: per-tick flipbook frame swap ran (survived)
+text = '''{ extern void rs64_effect_probe(unsigned, unsigned); rs64_effect_probe(1, (unsigned)ctx->r6); }'''
+
+[[patches.hook]]
+func = "orientedNpcHandler"
+before_vram = 0x8007007C   # jal addNpcToVisibilityBucket: queued for render
+text = '''{ extern void rs64_effect_probe(unsigned, unsigned); rs64_effect_probe(2, 0); }'''
+
+[[patches.hook]]
+func = "orientedNpcHandler"
+before_vram = 0x8006FE44   # jal destroyNpcSlotByIndex: sprite died (alive gauge)
+text = '''{ extern void rs64_effect_probe(unsigned, unsigned); rs64_effect_probe(3, 0); }'''
 
 # musyxKeyOnVoice (builds per-voice RSP rate/envelope ramps) runs by default.
 # Two entry guards: ROGUESQ_STUB_VOICESTART opt-out, and a period-0 skip (all

@@ -13,13 +13,13 @@ Set the env var to a non-zero value before launching the executable:
 
 **PowerShell / cmd**
 ```
-set ROGUESQ_LOG_DPC=1
+set ROGUESQ_LOG_VI=1
 build\Debug\RogueSquadron64Recomp.exe
 ```
 
 **bash / git-bash**
 ```
-ROGUESQ_LOG_DPC=1 ./build/Debug/RogueSquadron64Recomp.exe
+ROGUESQ_LOG_VI=1 ./build/Debug/RogueSquadron64Recomp.exe
 ```
 
 **Catch-all**: `ROGUESQ_LOG_ALL=1` enables every category at once.
@@ -31,8 +31,8 @@ the environment, by passing it to the executable as `--set NAME=VALUE` (or a
 bare `NAME=VALUE`). These are equivalent:
 
 ```
-RogueSquadron64Recomp.exe --set ROGUESQ_LOG_DPC=1
-ROGUESQ_LOG_DPC=1 RogueSquadron64Recomp.exe
+RogueSquadron64Recomp.exe --set ROGUESQ_LOG_VI=1
+ROGUESQ_LOG_VI=1 RogueSquadron64Recomp.exe
 ```
 
 The common *user-facing* runtime options (graphics API, frame loop, audio,
@@ -44,10 +44,6 @@ Everything below is debug/diagnostic and stays variable-only.
 | Env Var | Default | Tags Enabled | When To Enable |
 |---|---|---|---|
 | `ROGUESQ_LOG_ALL` | off | everything below | Quick "show me everything" — heavy output, OK for one-shot diagnostic. |
-| `ROGUESQ_LOG_DPC` | off | `[task-brief]`, `[task]`, `[task#N gfx]`, `[task#N gfx-FULL]`, `[task#N setcombine]`, `[task#N movemem-idx]`, `[task#N hist]`, `[dpc] FULL_SYNC byte sent`, `[dpc] G_SETPRIM/ENV_COLOR`, `[dpc] PRIM override`, `[dpc] SET_COLOR/DEPTH/TEXTURE_IMAGE`, `[dpc-pak] *`, `[dpc-cine] ENTER`, `[dpc-64tri] ENTER`, `[trace] cinematic_drv ENTRY/BEFORE/AFTER` | Tracing what GFX commands the Factor5 LLE ucode emits. **Highest-volume category** — easily 1000+ lines/sec during cinematic. Use when investigating combiner muxes, texture loads, task pacing, or per-task tri/texrect counts. |
-| `ROGUESQ_LOG_RDP_STATE` | off | `[trace] setCombine #N mux=...`, `[trace] setOtherMode #N cycleType=...`, `[texfilt] tf=...`, `[particle-mux] otherMode...` | RDP-state diagnosis — which combiner/cycleType is active when a specific draw fires. Useful when correlating "what mux runs at frame X" or "did texfilt change between expected and actual". |
-| `ROGUESQ_LOG_PRESENT` | off | `[trace] RT64::Present #N swapIdx=...`, `[trace] PresentQueue::frame #N`, `[trace] Present::lookup`, `[trace] PresentQ::regfb/scratch`, `[trace] fbReg`, `[vi-status] word=...` | VI presentation / framebuffer routing investigations. The buffer-arbiter bug was diagnosed via these traces. Fires ~60 lines/sec. |
-| `ROGUESQ_LOG_SP_TASKS` | off | `[sp] osSpTaskStartGo #N kind=GFX...` | Task-scheduling rate (cinematic ~30/s, normal play 1-2/frame). Useful when tracking how often the game submits GFX tasks to the RSP. |
 | `ROGUESQ_LOG_VI` | off | `[osViSetMode #N ...]`, `[osViSwapBuffer #N fb=...]`, `[osViSetXScale/YScale]`, `[osViBlack]` | The game's VI mode and swap calls as they reach the libultra shims. |
 | `ROGUESQ_LOG_THREADS` | off | `[osDestroyThread] t=... queue=... qok=... chain_ok=...` | Thread teardown with the queue-chain check. A failed check is always printed. |
 | `ROGUESQ_LOG_PIPELINE` | off | `[pipe-1]`, `[pipe-2]`, `[pipe-3]` stage counters in RT64 framebuffer renderer | Per-stage TEXRECT pipeline counters (push → GPU draw). Used to verify the pipeline isn't dropping cinematic content between submission and rasterization. |
@@ -82,7 +78,6 @@ they're orthogonal to the log gates above but commonly co-used.
 | `ROGUESQ_F5_CHAIN_CAP` | 256 | Max chunks in one F5 next-link chain before the walker ends the display list (backstop against a stale call walking the free list). 256 = the window `f5_chunk_revisit` can still detect a cycle in. A dense frame legitimately chains ~84 chunks; the previous cap of 64 truncated those lists mid-frame and dropped a contiguous block of terrain (the LucasArts flyover hole). |
 | `ROGUESQ_F5_CULL` | on | Factor 5 cull semantics in `RSP::drawIndexedTri`: only geometry-mode bit 0x2000 culls (back faces); bit 0x1000 is the ucode's texcoord-perspective flag, not G_CULL_FRONT, so it never swaps or culls; both bits = back-face cull. `0` restores the F3DEX reading (0x1000 = CULL_FRONT, both = double-sided via `ROGUESQ_F5_CULLBOTH_DRAW`). |
 | `ROGUESQ_F5_NON` | off | Force `NoN` (No-Near-clipping) for the Factor 5 ucode: `1` disables the GPU hard near-plane clip and uses the far-plane manual clamp instead. F5 uniquely ships `NoN=false`, so `depthClipEnabled=true` discards large geometry as it approaches the camera (objects "culled / lower-detail up close"). A/B fix for that symptom; matches every other `.NoN` ucode. Applied in `RSP::setGBI` (`lib/rt64/src/hle/rt64_rsp.cpp`). |
-| `ROGUESQ_LLE_FORCE` | off | Route `M_GFXTASK` through the recompiled RSP ucode + `dpc_bridge.cpp` instead of RT64 HLE. Diagnostic only — semi-broken (cinematic tasks hit an unhandled jump). Companions `ROGUESQ_LLE_UNGATED` (skip the attribution-page gate) and `ROGUESQ_LLE_SOLO` (skip the HLE fallthrough). |
 
 ### Boot / attract-demo navigation
 
@@ -135,7 +130,7 @@ exe (written with defaults on first run). Rebind in-app via **F1 then F6**
    static const bool log_x = []{
        const char *a = std::getenv("ROGUESQ_LOG_ALL");
        if (a && *a && *a != '0') return true;
-       const char *e = std::getenv("ROGUESQ_LOG_DPC");  // your category
+       const char *e = std::getenv("ROGUESQ_LOG_VI");  // your category
        return e && *e && *e != '0';
    }();
    if (log_x) {
@@ -149,7 +144,7 @@ exe (written with defaults on first run). Rebind in-app via **F1 then F6**
    static int log_x_init = 0, log_x = 0;
    if (!log_x_init) {
        const char *a = getenv("ROGUESQ_LOG_ALL");
-       const char *e = getenv("ROGUESQ_LOG_DPC");
+       const char *e = getenv("ROGUESQ_LOG_VI");
        log_x = ((a && *a && *a != '0') || (e && *e && *e != '0')) ? 1 : 0;
        log_x_init = 1;
    }

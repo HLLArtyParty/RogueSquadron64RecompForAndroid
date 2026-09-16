@@ -11,7 +11,6 @@ src/main/rt64_render_context.cpp        RT64 host context; HLE send_dl, present-
 src/main/upstream_compat.cpp            libultra shims and scheduler overrides
 src/main/hook_helpers.cpp               Host entry points for rogue_squadron.toml hooks (watchdog, pacing, matpool, DL walkers)
 src/rsp/dpc_bridge.cpp                  DPC_START/DPC_END bridge into RT64
-src/rsp/dpc_bridge_diag.cpp             DL stream tracing/diagnostics
 src/rsp/aspMain.cpp                     Audio RSP microcode stub
 lib/N64ModernRuntime/                   Submodule — fork at MikeSemicolonD/N64ModernRuntime
   ├── librecomp/                        Recompiler runtime (overlay loading, get_function, SEH)
@@ -66,7 +65,6 @@ for. Any variable can be set on the command line with `--set NAME=VALUE`.
 | `ROGUESQ_VI_DRIVEN_LOOP=0` | Old host-paced frame loop instead of the hardware VI protocol (default on). The VI-driven loop matches hardware message order and is the current stability baseline |
 | `ROGUESQ_F5_NATIVE=0` | Parse F5 display lists without emitting geometry |
 | `ROGUESQ_F5_CHUNK_BOUND=0` | Disable the F5 DL chunk-bounded fetch rule (default on) |
-| `ROGUESQ_LLE_FORCE=1` | Run graphics through the recompiled RSP ucode instead of HLE (diagnostic only — see dead ends) |
 | `ROGUESQ_FB_GUARDS=0` | Disable the host framebuffer-window guards for A/B against goldens |
 | `ROGUESQ_NO_AUDIO_UCODE=1` | Silent audio stub instead of the MusyX synth |
 | `ROGUESQ_DUMP_PCM=<path>` | Write the synth output to a 22050 Hz stereo WAV |
@@ -261,7 +259,6 @@ For a hang specifically: if it's a cutscene/demo, suspect a recompiler codegen m
 - **Y-flip / component swap on model textures** — retired. The stream is byte-faithful to golden; the texturing bug is inside RT64's render of a correct DL, not in our submission or a coordinate transform. Fix RT64, not the stream.
 - **`ROGUESQ_SUPPRESS_OOB_CIMG` LOW-region filter as default-on** — Factor 5 LLE legitimately emits some lowmem CIMGs; keep it env-gated.
 - **Synthetic per-halt FULL_SYNC injection in dpc_bridge** — corrupts RT64 tile state mid-frame; white-bounding-box artifacts and AVs in `loadTileOperation`.
-- **Running LLE + HLE in parallel (`ROGUESQ_LLE_FORCE=1` without solo)** — LLE hits `Unhandled jump target 0xFEDB` on cinematic tasks, dpc_bridge SEH-catches an AV inside `processDisplayLists`, and a downstream `fullSync` then asserts on "Unimplemented 4 bits Readback mode". The 4-bit assertion is a *symptom* of LLE state corruption, not a real game-side issue.
 - **A `cv.wait` rewrite of RT64's present-queue busy-wait** (`rt64_present_queue.cpp:38-46`) — regressed natural-exit rate. Reverted.
 
 ### libultra / scheduler

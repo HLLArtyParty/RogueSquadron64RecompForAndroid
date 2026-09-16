@@ -13,8 +13,8 @@
 // don't gate those.
 //
 // Usage:
-//   if (recomp::dbg::log_dpc()) {
-//       fprintf(stderr, "[dpc-pak] %s w0=0x%08X\n", name, w0);
+//   if (recomp::dbg::log_vi()) {
+//       fprintf(stderr, "[osViSwapBuffer #%d] fb=0x%08X\n", n, fb);
 //   }
 //
 // To enable everything quickly:
@@ -39,42 +39,6 @@ inline bool env_flag(const char *name) {
     if (std::strcmp(e, "false") == 0) return false;
     if (std::strcmp(e, "no") == 0) return false;
     return true;
-}
-
-// Legacy LLE DPC trace gate. The dpc_bridge.cpp pretty-printer
-// (`[dpc-pak] ...` etc.) was retired 2026-05-09 alongside the LLE pipeline;
-// the gate is preserved for any future LLE bring-up but currently has no
-// callers. ROGUESQ_LOG_DPC=1.
-inline bool log_dpc() {
-    static const bool v = env_flag("ROGUESQ_LOG_DPC");
-    return v;
-}
-
-// rt64 setCombine / setOtherMode traces (`[trace] setCombine #N ...`,
-// `[trace] setOtherMode #N ...`). One line per state change. Useful when
-// tracking which combiner/mode is active at a specific draw.
-// ROGUESQ_LOG_RDP_STATE=1.
-inline bool log_rdp_state() {
-    static const bool v = env_flag("ROGUESQ_LOG_RDP_STATE");
-    return v;
-}
-
-// VI present-queue traces (`[trace] PresentQueue::frame ...`,
-// `[trace] RT64::Present #N ...`, `[trace] Present::lookup ...`,
-// `[trace] PresentQ::regfb ...`, `[trace] fbReg #N ...`). Per-frame
-// noise. Useful when investigating framebuffer routing / VI origin.
-// ROGUESQ_LOG_PRESENT=1.
-inline bool log_present() {
-    static const bool v = env_flag("ROGUESQ_LOG_PRESENT");
-    return v;
-}
-
-// SP task dispatch (`[sp] osSpTaskStartGo #N kind=GFX ...`,
-// `[trace] DISPATCH slot=N ...`). One line per submitted GFX task.
-// Useful when tracking task scheduling rate. ROGUESQ_LOG_SP_TASKS=1.
-inline bool log_sp_tasks() {
-    static const bool v = env_flag("ROGUESQ_LOG_SP_TASKS");
-    return v;
 }
 
 // libultra VI shims: osViSetMode / osViSwapBuffer / osViSetXScale / osViSetYScale / osViBlack.
