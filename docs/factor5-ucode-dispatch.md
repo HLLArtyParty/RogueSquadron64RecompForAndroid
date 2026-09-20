@@ -1,7 +1,7 @@
 # Factor5 RSP ucode — dispatch + handler map
 
-Working notes from RE pass 2026-05-04. Treat this as the current source
-of truth for the dispatch table and handler addresses.
+Working notes on the dispatch table and handler addresses. Per-opcode meaning is
+authoritative in [f5-model-dl-spec.md §7](f5-model-dl-spec.md).
 
 ## Files
 
@@ -106,18 +106,6 @@ at a different *stage*, not a separate function).
 - For each vertex: clip-matrix multiply (0x5AC..0x5CC), perspective divide (0x5D4..0x5D8), clip-flag computation (vch/vcl twice at 0x5DC..0x5EC), screen-space transform (0x608..0x624), clip-flag pack (0x5F0..0x600, 0x60C..0x628)
 - Stores clip flags at `0x24($9)` and probably more
 
-## Open questions for HLE implementation
-
-1. **Vertex format**: how many bytes per input vertex, what fields. Likely
-   includes position (3×i16), color (RGBA8), texcoord (2×i16), normal? — need to
-   trace where `$8` gets its initial value (from a setup op via DMA).
-2. **Matrix stack management**: where does the projection matrix come from in
-   DMEM (constant 0x280 seen at 0x59C), how is the modelview composed?
-3. **Triangle output format**: what does the handler write that downstream RDP
-   triangle ops consume?
-4. **Lighting**: there's a path mentioning `lhu $3, 0x34($18)` checking a flag —
-   may switch lighting on/off. Not yet traced.
-
-The dispatch table is fully decoded. The remaining 1.5–2 weeks of work split
-into roughly: 2–3 days tracing data flow (questions 1–4 above), 1 week writing
-the C++ HLE, 3–5 days debugging.
+The per-opcode semantics decoded from this table are superseded by the
+IMEM-listing grammar in [f5-model-dl-spec.md §7](f5-model-dl-spec.md), whose
+addresses are the real IMEM values (this doc's handler PCs are offset).

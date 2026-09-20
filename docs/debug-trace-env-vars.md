@@ -1,11 +1,8 @@
 # Debug Trace Environment Variables
 
-The recompile accumulates many `fprintf(stderr, "[tag] ...")` trace points
-during bug investigation. Most fire dozens or hundreds of lines per second
-and are silent on a healthy run. To keep the terminal usable they are
-gated behind environment-variable flags. This file lists every flag, what
-trace tags it controls, where the code lives, and when you'd want to turn
-it on.
+Trace points are gated behind environment-variable flags; most are silent on a
+healthy run and high-volume when enabled. This file lists every flag, the trace
+tags it controls, and when to turn it on.
 
 ## How to enable
 
@@ -88,22 +85,21 @@ game RDRAM each present, same pattern as the other pokes.
 | Env Var | Default | Effect |
 |---|---|---|
 | `ROGUESQ_CINE_FASTFWD` | `0` | Adds N extra ticks to the VI-retrace count (`0x8011A890`) each present while the intro cutscene is active and its `gateCtr` (`0x800B0B28`) is below the end threshold (`cutscene[0x44]-0xA`). Inflates the cinematic dt so the intro completes NATURALLY in seconds instead of ~6 min headless. Not a skip — the game still sets its own done bits. Use e.g. `=200`. |
-| `ROGUESQ_SKIP_DEMO` | (unset) | Pins `gGameSettings.demoId` (`0x80130B54`) = N (0-5) every present, and pins the wrap counter `unk15` (`0x80130B55`) = 0 so `cycleIdleDemoId` (`0x8006F044`) can't drift the selector — so the attract mode plays (and LOOPS) that demo directly, skipping earlier demos + transitions. `demoId`→level: **0**=Mos Eisley/Tatooine, **1**=Jade Moon, **2**=Kile II, **3**=Taloraan, **4**=Fest, **5**=Trench Run (`dLevelByDemoId` `0x800CD404` = `00 05 07 0A 0B 11`; `gDemoFilenames` `0x80109AE4`). Combine with `ROGUESQ_CINE_FASTFWD` to blast the intro. Example: `ROGUESQ_SKIP_DEMO=1 ROGUESQ_CINE_FASTFWD=200` → Jade Moon in ~2 min. Selector RE in [plans/jade-moon-demo-freeze-plan.md](../plans/jade-moon-demo-freeze-plan.md). |
-| `ROGUESQ_SKIP_TO_JADEMOON` | off | Convenience alias for `ROGUESQ_SKIP_DEMO=1` (the Jade Moon demo — has the structure-explosion freeze under investigation). |
+| `ROGUESQ_SKIP_DEMO` | (unset) | Pins `gGameSettings.demoId` (`0x80130B54`) = N (0-5) every present, and pins the wrap counter `unk15` (`0x80130B55`) = 0 so `cycleIdleDemoId` (`0x8006F044`) can't drift the selector — so the attract mode plays (and LOOPS) that demo directly, skipping earlier demos + transitions. `demoId`→level: **0**=Mos Eisley/Tatooine, **1**=Jade Moon, **2**=Kile II, **3**=Taloraan, **4**=Fest, **5**=Trench Run (`dLevelByDemoId` `0x800CD404` = `00 05 07 0A 0B 11`; `gDemoFilenames` `0x80109AE4`). Combine with `ROGUESQ_CINE_FASTFWD` to blast the intro. Example: `ROGUESQ_SKIP_DEMO=1 ROGUESQ_CINE_FASTFWD=200` → Jade Moon in ~2 min. |
+| `ROGUESQ_SKIP_TO_JADEMOON` | off | Convenience alias for `ROGUESQ_SKIP_DEMO=1` (the Jade Moon demo). |
 
-### RT64 raster enhancements (Phase 0)
+### RT64 raster enhancements
 
 Opt-in `UserConfiguration` knobs applied in `create_render_context` (`src/main/rt64_render_context.cpp`)
-before `app->setup()`. Raster-only (this build has `RT_ENABLED` off — no RT/DLSS/FSR/XeSS). See
-[plans/rt64-f5-integration-plan.md](../plans/rt64-f5-integration-plan.md). Default baseline is unchanged
-unless set.
+before `app->setup()`. Raster-only (this build has `RT_ENABLED` off — no RT/DLSS/FSR/XeSS). Default
+baseline is unchanged unless set.
 
 | Env Var | Default | Effect |
 |---|---|---|
 | `ROGUESQ_MSAA` | off | Multisample anti-aliasing: `2`/`4`/`8` → MSAA 2x/4x/8x (rounds down; `<2` = None). |
 | `ROGUESQ_RES_SCALE` | (RT64 2x) | Internal render-resolution multiplier; sets `resolution=Manual` + `resolutionMultiplier=<mult>` (e.g. `3.0`). Clamped by RT64's limit in `validate()`. |
 | `ROGUESQ_SSAA` | `1` | Supersample downsample factor (`>=2` renders higher then downsamples — sharper, costlier). |
-| `ROGUESQ_WIDESCREEN` | off | `1` → `aspectRatio=Expand` (fills the window aspect). F5 HUD/2D may need alignment work at non-4:3 (plan Phase 1b). |
+| `ROGUESQ_WIDESCREEN` | off | `1` → `aspectRatio=Expand` (fills the window aspect). F5 HUD/2D may need alignment work at non-4:3. |
 | `ROGUESQ_ASPECT` | (unset) | Force a specific aspect ratio as a decimal `w/h` (e.g. `1.7777`); sets `aspectRatio=Manual`. Takes precedence over `ROGUESQ_WIDESCREEN`. |
 | `ROGUESQ_HDR` | off | `1` → `internalColorFormat=High` (higher-precision internal color target). |
 | `ROGUESQ_TEX_FILTER` | `aa` | Texture filtering: `nearest` / `linear` / `aa` (AntiAliasedPixelScaling). |
