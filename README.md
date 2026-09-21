@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/main/favicon.ico">
+  <img alt="favicon made by thedoctor45" src="https://github.com/MikeSemicolonD/RogueSquadron64Recomp/blob/main/favicon.ico">
 
   Icon by [thedoctor45 on DeviantArt](https://www.deviantart.com/thedoctor45/art/Star-Wars-Rogue-Squadron-3D-Custom-Icon-535469296)
 
@@ -20,18 +20,18 @@ A static recompilation of **Star Wars: Rogue Squadron** (N64, USA v1.0) built wi
 
 <table>
   <tr>
-    <td><img src="./screenshots/progress2/Capture1.PNG"></td>
-    <td><img src="./screenshots/progress2/Capture2.PNG"></td>
-    <td><img src="./screenshots/progress2/Capture3.PNG"></td>
-    <td><img src="./screenshots/progress2/Capture4.PNG"></td>
-    <td><img src="./screenshots/progress2/Capture5.PNG"></td>
+    <td><img alt="Recomp screenshot" src="./screenshots/progress2/Capture1.PNG"></td>
+    <td><img alt="Recomp screenshot" src="./screenshots/progress2/Capture2.PNG"></td>
+    <td><img alt="Recomp screenshot" src="./screenshots/progress2/Capture3.PNG"></td>
+    <td><img alt="Recomp screenshot" src="./screenshots/progress2/Capture4.PNG"></td>
+    <td><img alt="Recomp screenshot" src="./screenshots/progress2/Capture5.PNG"></td>
   </tr>
   <tr>
-    <td><img src="./screenshots/progress2/Capture6.PNG"></td>
-    <td><img src="./screenshots/progress2/Capture7.PNG"></td>
-    <td><img src="./screenshots/progress2/Capture8.PNG"></td>
-    <td><img src="./screenshots/progress2/Capture9.PNG"></td>
-    <td><img src="./screenshots/progress2/Capture10.PNG"></td>
+    <td><img alt="Recomp screenshot" src="./screenshots/progress2/Capture6.PNG"></td>
+    <td><img alt="Recomp screenshot" src="./screenshots/progress2/Capture7.PNG"></td>
+    <td><img alt="Recomp screenshot" src="./screenshots/progress2/Capture8.PNG"></td>
+    <td><img alt="Recomp screenshot" src="./screenshots/progress2/Capture9.PNG"></td>
+    <td><img alt="Recomp screenshot" src="./screenshots/progress2/Capture10.PNG"></td>
   </tr>
 </table>
 </div>
@@ -41,7 +41,7 @@ A static recompilation of **Star Wars: Rogue Squadron** (N64, USA v1.0) built wi
 ## Requirements
 
 | Requirement | Notes |
-|---|---|
+| --- | --- |
 | **ROM** | `rogue_squadron.z64`, USA v1.0 (16 MB, xxHash3-64 `0x6B66A44153594DEA`) |
 | **OS / GPU** | Windows 10+, Linux, or macOS 11+ with a D3D12, Vulkan, or Metal capable GPU |
 | **CMake** | 3.20+ |
@@ -92,7 +92,7 @@ cmake --build build
 The binary is `build/Debug/RogueSquadron64Recomp.exe` (Windows) or `build/RogueSquadron64Recomp` (Linux/macOS). Host-side edits rebuild and link in well under a minute.
 
 | CMake option | Default | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | `-DMIPS_TOOLCHAIN_DIR=path` | `E:/mips-toolchain` | Location of `mips64-elf-gcc` for `patches/` |
 | `-DROGUESQ_DX12_DEBUG=ON` | OFF | D3D12 debug layer (Debug builds only) |
 | `-DROGUESQ_NO_ITER_DEBUG=ON` | OFF | Disable MSVC debug iterators in `lib/rt64` for faster Debug runs |
@@ -104,7 +104,7 @@ The binary is `build/Debug/RogueSquadron64Recomp.exe` (Windows) or `build/RogueS
 `rogue_squadron.toml` is the N64Recomp config: it names the input ROM/ELF and defines the override layer applied during `regen_funcs`. Three directives shape the generated output without hand-editing it:
 
 | Directive | Effect |
-|---|---|
+| --- | --- |
 | `stubs = [...]` | Replace a function body with an empty no-op (RSP blobs, cache-instruction leaves, splat fragments) |
 | `[[patches.instruction]]` | Overwrite one instruction at a `vram` with a raw `value` (e.g. NOP a `cache` op or a busy-wait branch) |
 | `[[patches.hook]]` | Inject C at a function's entry or before a `vram` — guards, pacing, logging. Host helpers live in `src/main/hook_helpers.cpp` |
@@ -162,16 +162,22 @@ which you can also hand-edit.
 
 ---
 
-## Status
+## Status (PLAYABLE)
+
+> I have personally managed to play it all the way through from the first level to the credits sequence.
 
 Issues:
 
-- Performance hitches in spots (although not as bad as the n64 game)
-- Particle effect's complex meshes doesn't completely respect z-depth sorting compared with their 2D quad sprite effects. Causing meshes to appear in front of a 2D sprite effect when they're really behind it.
-- Crashing after completing a level (still completes and receives medal, just crashes a bit after)
+- Text and background during the Credit sequence renders incorrectly, with it clipping letters. The background has some slight visual artifacts as well. (Happens after completing the game, NOT when the 'CREDITS' passcode is entered. Meaning that the issue probably stems from the ending cutscene that plays prior to the credits)
 
+- Some CPU performance hitching and slow down (~20fps) in spots (although not as bad as the real n64 game)
 - Random crashes after long play session on Debug builds which is from memory filling up via debug variables/maps/arrays. (Needs **serious** cleanup)
 - Cutscenes having screen sizes of varying widths which could genuinely be an issue with the game itself.
+- Random sliver/line of pixel garbage flickering on the far right of the frame during cutscenes or certain menus like the hangar or credits.
+
+- Frame interpolation *can be enabled* **BUT** it causes visual glitches due to how objects are ID'd. (The biggest pain point on this is the terrain which generates/changes on the fly causing the whole terrain to visually stutter) The performance hitches also causes frame stutter when interpolation is enabled.
+
+- Low Resolution mode works but affects how cutscenes are displayed with them appearing more wide than they probably should be.
 
 - **THIS HAS NOT BEEN BUILT/TESTED ON MACOS OR LINUX. Your mileage may vary.**
 
@@ -234,7 +240,7 @@ Each option maps to a `ROGUESQ_*` environment variable, which still works (a bar
 
 **F5** toggles Factor 5's own built-in frame-profiler HUD (a dormant retail feature, gated by one RDRAM byte). Bars: yellow = CPU (frame submit), blue = RSP/geometry, red = RDP total; magenta/white/green are the RDP command/raster/texture breakdown, fed genuine RT64 workload proxies (draw calls / triangles / texture loads) since the PC path has no RDP hardware counters — scale them with `ROGUESQ_DRAW_SCALE` / `ROGUESQ_TRIS_SCALE` / `ROGUESQ_TEX_SCALE`. `ROGUESQ_PROFILER_DUMP=1` logs the raw slot values.
 
-<img src="./docs/ProfilerBars.PNG">
+<img alt="Factor5's built-in profiler" src="./docs/ProfilerBars.PNG">
 
 - Blue bar    = render/geometry cost (RSP + display-list processing)
 - Red bar     = rasterization/fill cost (RDP)
@@ -245,6 +251,10 @@ Each option maps to a `ROGUESQ_*` environment variable, which still works (a bar
 - Cyan Bar    = Not used
 
 *The recomp re-uses the RDP bars by basing them on the draw calls from rt64 (It's an approximation that is not representative of how DPC performs on actual hardware)
+
+### Local save editor tool
+
+A save editor also exists in *`tools/save-editor`* as an HTML page. Allowing a user to easily create, edit and export a save into any of the following formats: .*`.bin, .eep, .srm, .sra and .raw`*
 
 ---
 

@@ -10,10 +10,7 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <dbghelp.h>
 #include <timeapi.h>
-#include <tlhelp32.h>
-#pragma comment(lib, "dbghelp.lib")
 #pragma comment(lib, "winmm.lib")
 #endif
 
@@ -24,10 +21,16 @@ using recomp::dbg::env_str;
 using recomp::dbg::env_on;
 using recomp::dbg::env_int;
 
+// Diagnostic-only helper bodies (DL dumps, medal-probe, hook log sink) compile
+// to no-op stubs in Release so the symbols still link for the recomp's calls.
+#ifdef NDEBUG
+#define RS64_DIAG 0
+#else
+#define RS64_DIAG 1
+#endif
+
 extern "C" int rs64_vi_driven(void);                                   // upstream_compat.cpp
 extern "C" int rs64_fb_guards_mask(void);                              // upstream_compat.cpp
-extern void print_stack_with_symbols(void** frames, unsigned short count);  // main.cpp
-extern "C" volatile uint8_t* volatile g_recomp_rdram_for_wp_raw;       // main.cpp
 
 // ---- Boot target ----
 
@@ -60,6 +63,7 @@ extern "C" volatile unsigned g_op_bf_count = 0;    // bumped by the F5 GBI per e
 
 // ROGUESQ_LOG_HOOKS=1: stderr for hook code.
 extern "C" void rs64_dbg_log4(const char* tag, unsigned a, unsigned b, unsigned c, unsigned d) {
+#if RS64_DIAG
     static const bool on = env_on("ROGUESQ_LOG_HOOKS");
     if (!on) return;
 #ifdef _WIN32
@@ -70,193 +74,19 @@ extern "C" void rs64_dbg_log4(const char* tag, unsigned a, unsigned b, unsigned 
 #endif
     fprintf(stderr, "[hook t=%ums] %s a=0x%08X b=0x%08X c=0x%08X d=0x%08X\n", ms, tag ? tag : "?", a, b, c, d);
     fflush(stderr);
+#else
+    (void)tag; (void)a; (void)b; (void)c; (void)d;
+#endif
 }
 
-// ---- Cinematic watchdog ----
+// ---- Cinematic loop landmark counter ----
 
-#ifdef _WIN32
-static std::atomic<DWORD> g_cine_tid{0};
+// Ticked by the cinematicLoopBody hook; read by the f5-dl-validate landmark, the
+// render-context RDRAM-on-iter snapshot, and the ROGUESQ_CINE_HOLD_ITER pacer.
 static std::atomic<uint64_t> g_cine_iter{0};
-static std::atomic<uint64_t> g_cine_last_ms{0};
-
-static void rs64_cine_start_watchdog_thread(void);
-static void rs64_dump_all_thread_stacks(DWORD game_tid);
 
 extern "C" unsigned long long rs64_cine_iter_get(void) { return g_cine_iter.load(std::memory_order_relaxed); }
-
-// Called from the cinematic loop-top hook.
-extern "C" void rs64_cine_iter_tick(unsigned iter) {
-    g_cine_tid.store(GetCurrentThreadId(), std::memory_order_relaxed);
-    g_cine_iter.store(iter, std::memory_order_relaxed);
-    g_cine_last_ms.store(GetTickCount64(), std::memory_order_relaxed);
-    rs64_cine_start_watchdog_thread();
-}
-
-static void rs64_cine_progress_log(void) {
-    static uint64_t s_last_log_ms = 0, s_last_log_iter = 0;
-    uint64_t now = GetTickCount64();
-    if (now - s_last_log_ms < 2000) return;
-    uint64_t cur = g_cine_iter.load(std::memory_order_relaxed);
-    uint64_t age_ms = g_cine_last_ms.load() ? now - g_cine_last_ms.load() : 0;
-    fprintf(stderr, "[cine-progress] iter=%llu delta=%llu in %llums (idle=%llums)\n",
-            (unsigned long long)cur, (unsigned long long)(cur - s_last_log_iter),
-            (unsigned long long)(now - s_last_log_ms), (unsigned long long)age_ms);
-    fflush(stderr);
-    s_last_log_ms = now;
-    s_last_log_iter = cur;
-}
-
-// Suspend one thread, walk its stack, print it.
-static void rs64_dump_thread_stack(DWORD tid, const char* label) {
-    HANDLE hThread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_LIMITED_INFORMATION, FALSE, tid);
-    if (!hThread) { fprintf(stderr, "[stack] %s tid=%lu OpenThread failed err=%lu\n", label, tid, GetLastError()); return; }
-    wchar_t* desc = nullptr; char name[128] = "";
-    if (SUCCEEDED(GetThreadDescription(hThread, &desc)) && desc) { snprintf(name, sizeof name, "%ls", desc); LocalFree(desc); }
-    if (SuspendThread(hThread) == (DWORD)-1) { fprintf(stderr, "[stack] %s tid=%lu SuspendThread failed\n", label, tid); CloseHandle(hThread); return; }
-    CONTEXT ctx{}; ctx.ContextFlags = CONTEXT_ALL;
-    if (!GetThreadContext(hThread, &ctx)) { fprintf(stderr, "[stack] %s tid=%lu GetThreadContext failed\n", label, tid); ResumeThread(hThread); CloseHandle(hThread); return; }
-    STACKFRAME64 frame{};
-    frame.AddrPC.Offset = ctx.Rip; frame.AddrPC.Mode = AddrModeFlat;
-    frame.AddrFrame.Offset = ctx.Rbp; frame.AddrFrame.Mode = AddrModeFlat;
-    frame.AddrStack.Offset = ctx.Rsp; frame.AddrStack.Mode = AddrModeFlat;
-    void* frames[40]; USHORT count = 0; HANDLE hProcess = GetCurrentProcess();
-    while (count < 40) {
-        if (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, hProcess, hThread, &frame, &ctx, NULL, SymFunctionTableAccess64, SymGetModuleBase64, NULL)) break;
-        if (frame.AddrPC.Offset == 0) break;
-        frames[count++] = (void*)(uintptr_t)frame.AddrPC.Offset;
-    }
-    ResumeThread(hThread); CloseHandle(hThread);
-    fprintf(stderr, "[stack] %s tid=%lu \"%s\" (%u frames)\n", label, tid, name, count);
-    print_stack_with_symbols(frames, count); fflush(stderr);
-}
-
-// Every thread except the caller, game thread first.
-static void rs64_dump_all_thread_stacks(DWORD game_tid) {
-    SymInitialize(GetCurrentProcess(), NULL, TRUE);
-    if (game_tid) rs64_dump_thread_stack(game_tid, "game");
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-    if (snap == INVALID_HANDLE_VALUE) return;
-    THREADENTRY32 te{}; te.dwSize = sizeof te; DWORD pid = GetCurrentProcessId(), self = GetCurrentThreadId();
-    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
-        if (te.th32OwnerProcessID != pid || te.th32ThreadID == self || te.th32ThreadID == game_tid) continue;
-        rs64_dump_thread_stack(te.th32ThreadID, "thread");
-    }
-    CloseHandle(snap);
-}
-
-// Cinematic loop idle for 2 s -> dump every thread's stack. Sampled up to 3
-// times at >=3 s apart so a run-to-run-variable gfx thread can be seen moving
-// (scheduler stall) vs pinned in processDisplayLists (DL parse hang).
-static void rs64_cine_dump_if_stuck(void) {
-    static std::atomic<int> s_dumps{0};
-    static std::atomic<uint64_t> s_last_dump{0};
-    // ROGUESQ_CINE_DUMPS / ROGUESQ_CINE_DUMP_SPACING_MS: sample count (3) and spacing (3000).
-    static const int s_max = [](){ const char* e = recomp::os::getenv("ROGUESQ_CINE_DUMPS"); int v = e ? atoi(e) : 3; return v > 0 ? v : 3; }();
-    static const uint64_t s_spacing = [](){ const char* e = recomp::os::getenv("ROGUESQ_CINE_DUMP_SPACING_MS"); long v = e ? atol(e) : 3000; return (uint64_t)(v > 0 ? v : 3000); }();
-    if (s_dumps.load(std::memory_order_relaxed) >= s_max) return;
-    uint64_t last = g_cine_last_ms.load(std::memory_order_relaxed);
-    if (last == 0) return;
-    uint64_t now = GetTickCount64();
-    if (now - last < 2000) return;
-    if (now - s_last_dump.load(std::memory_order_relaxed) < s_spacing) return;
-    DWORD tid = g_cine_tid.load(std::memory_order_relaxed);
-    if (tid == 0) return;
-    s_last_dump.store(now, std::memory_order_relaxed);
-    int n = s_dumps.fetch_add(1, std::memory_order_relaxed) + 1;
-    fprintf(stderr, "[cine-watchdog] freeze sample %d: tid=%lu iter=%llu idle=%llums\n",
-            n, tid, (unsigned long long)g_cine_iter.load(), (unsigned long long)(now - last));
-    // OSMesgQueue state for the frame/DP-pacing queues submitGfxFrame waits on. Shows
-    // whether a message is sitting undelivered (validCount>0 while a thread blocks) or
-    // was never produced (validCount==0). Struct: validCount@0x08 first@0x0C msgCount@0x10.
-    if (const uint8_t* rd = (const uint8_t*)g_recomp_rdram_for_wp_raw) {
-        auto rd32be = [rd](uint32_t a){ a &= 0x00FFFFFFu; return (uint32_t(rd[a^3])<<24)|(uint32_t(rd[(a+1)^3])<<16)|(uint32_t(rd[(a+2)^3])<<8)|uint32_t(rd[(a+3)^3]); };
-        auto rd8 = [rd](uint32_t a){ a &= 0x00FFFFFFu; return rd[a^3]; };
-        const uint32_t qs[7] = { 0x8011A818u, 0x8011A408u, 0x8011A7E8u, 0x80114388u, 0x80128CF0u, 0x80128D10u, 0x8011A420u };
-        for (uint32_t q : qs)
-            fprintf(stderr, "  [mq 0x%08X] valid=%d first=%d msgCount=%d mtq=0x%08X fullq=0x%08X\n",
-                    q, (int)rd32be(q+8), (int)rd32be(q+0xC), (int)rd32be(q+0x10), rd32be(q+0), rd32be(q+4));
-        fprintf(stderr, "  [inflight byte 0x8011A89E]=%u\n", rd8(0x8011A89Eu));
-        fprintf(stderr, "  [flags] dpwait89D=%u swapReq8C8=%u ackPend8C9=%u consumerWaiting37808=%u\n",
-                rd8(0x8011A89Du), rd8(0x8011A8C8u), rd8(0x8011A8C9u), rd8(0x80037808u));
-        // Buffer arbiter: fbptr[]@0x80128E98, state[]@0x80128EAA, count@0x80128EAD, ctr[]@0x80128EA4, bytes 0x80128EAE/AF.
-        const unsigned cnt = rd8(0x80128EADu);
-        fprintf(stderr, "  [arbiter] count=%u eae=%u eaf=%u slots:", cnt, rd8(0x80128EAEu), rd8(0x80128EAFu));
-        for (unsigned i = 0; i < cnt && i < 3; ++i)
-            fprintf(stderr, " [%u fb=0x%08X st=%u ctr=%u]", i, rd32be(0x80128E98u + i*4), rd8(0x80128EAAu + i),
-                    (unsigned)((rd8(0x80128EA4u + i*2) << 8) | rd8(0x80128EA5u + i*2)));
-        fprintf(stderr, "\n");
-    }
-    fflush(stderr);
-    rs64_dump_all_thread_stacks(tid);
-}
-
-static void rs64_write_rdram_be(const uint8_t* rd, const char* path, const char* why) {
-    FILE* f = recomp::os::fopen(path, "wb");
-    if (f) {
-        static uint8_t buf[0x10000];
-        for (uint32_t base = 0; base < 0x800000u; base += sizeof buf) {
-            for (uint32_t i = 0; i < sizeof buf; ++i) buf[i] = rd[(base + i) ^ 3];
-            fwrite(buf, 1, sizeof buf, f);
-        }
-        fclose(f);
-    }
-    fprintf(stderr, "[rdram-dump] %s -> %s (%s)\n", why, path, f ? "ok" : "OPEN FAILED");
-    fflush(stderr);
-}
-
-// Own thread: the gfx thread can be parked on the same mutex chain that hangs the game thread.
-// ROGUESQ_DUMP_RDRAM_ON_CINE_STALL=<ms>: cinematic frame counter (0x8013889C) unchanged that long ->
-// RDRAM to ROGUESQ_DUMP_RDRAM_PATH (default dumps/rdram_cine_stall.bin).
-// ROGUESQ_DUMP_STACKS_ON_DEMO_STALL=<ms>: demo cursor (0x80109AE0) unchanged that long -> all stacks.
-static void rs64_cine_start_watchdog_thread(void) {
-    // Off by default; the progress log + freeze stack-dump sampler are diagnostic only.
-    // ROGUESQ_CINE_WATCHDOG=1 re-enables. The iter counter (rs64_cine_iter_get) still ticks
-    // regardless, so cine-hold / DL-dump snapshots are unaffected.
-    static const bool s_enabled = [](){ const char* e = recomp::os::getenv("ROGUESQ_CINE_WATCHDOG"); return e && atoi(e) != 0; }();
-    if (!s_enabled) return;
-    static std::atomic<bool> s_started{false};
-    if (s_started.exchange(true, std::memory_order_relaxed)) return;
-    std::thread([]() {
-        const uint64_t stall_ms = (uint64_t)std::atoll(env_str("ROGUESQ_DUMP_RDRAM_ON_CINE_STALL") ? env_str("ROGUESQ_DUMP_RDRAM_ON_CINE_STALL") : "0");
-        const uint64_t demo_ms = (uint64_t)std::atoll(env_str("ROGUESQ_DUMP_STACKS_ON_DEMO_STALL") ? env_str("ROGUESQ_DUMP_STACKS_ON_DEMO_STALL") : "0");
-        uint32_t last_frame = 0; uint64_t last_frame_change = 0; bool frame_dumped = false;
-        uint32_t last_demo = 0xFFFFFFFFu; uint64_t last_demo_change = 0; bool demo_dumped = false;
-        for (;;) {
-            ::Sleep(500);
-            rs64_cine_progress_log();
-            rs64_cine_dump_if_stuck();
-            const uint8_t* rd = (const uint8_t*)g_recomp_rdram_for_wp_raw;
-            if (!rd) continue;
-            const uint64_t now = GetTickCount64();
-            if (stall_ms && !frame_dumped) {
-                uint32_t frame = *reinterpret_cast<const uint32_t*>(rd + 0x13889C);
-                if (frame != last_frame) { last_frame = frame; last_frame_change = now; }
-                else if (frame > 0 && last_frame_change && now - last_frame_change >= stall_ms) {
-                    frame_dumped = true;
-                    const char* pe = env_str("ROGUESQ_DUMP_RDRAM_PATH");
-                    char why[96];
-                    snprintf(why, sizeof why, "cinematic frame counter stuck at %u for %llu ms", frame, (unsigned long long)(now - last_frame_change));
-                    rs64_write_rdram_be(rd, pe ? pe : "dumps/rdram_cine_stall.bin", why);
-                }
-            }
-            if (demo_ms && !demo_dumped) {
-                uint32_t ds = *reinterpret_cast<const uint32_t*>(rd + 0x109AE0);
-                if (ds != last_demo) { last_demo = ds; last_demo_change = now; }
-                else if (ds != 0 && ds != 0xFFFFFFFFu && last_demo_change && now - last_demo_change >= demo_ms) {
-                    demo_dumped = true;
-                    fprintf(stderr, "[demo-stall] demoStep stuck at %u for %llu ms; dumping all thread stacks\n",
-                            ds, (unsigned long long)(now - last_demo_change));
-                    fflush(stderr);
-                    rs64_dump_all_thread_stacks(g_cine_tid.load(std::memory_order_relaxed));
-                }
-            }
-        }
-    }).detach();
-}
-#else
-extern "C" void rs64_cine_iter_tick(unsigned) {}
-extern "C" unsigned long long rs64_cine_iter_get(void) { return 0; }
-#endif
+extern "C" void rs64_cine_iter_tick(unsigned iter) { g_cine_iter.store(iter, std::memory_order_relaxed); }
 
 // ---- Pacing ----
 
@@ -322,8 +152,8 @@ extern "C" void rs64_sleep_ms(unsigned ms) {
 // Bumped once per host VI retrace (main.cpp).
 extern "C" volatile unsigned g_vi_tick = 0;
 
-// Block until the next VI tick (cap ~40 ms). Paces the attribution loop to real time so the
-// VI-driven producer thread that lays out the glyphs gets to run.
+// Block until the next VI tick (cap ~40 ms). Paces a menu fade loop (attribution screen,
+// credits sequence) to real time so the VI-driven glyph-layout producer thread gets to run.
 extern "C" void rs64_attrib_wait_vi(void) {
 #ifdef _WIN32
     unsigned start = g_vi_tick;
@@ -337,6 +167,7 @@ extern "C" void rs64_attrib_wait_vi(void) {
 // TEXRECT count and bbox for all). ROGUESQ_DUMP_TEXTURES=1 also writes each SETTIMG source to
 // dumps/tex/. Read-only.
 extern "C" void rs64_dump_frame_dl(uint8_t* rdram, uint32_t dl_phys) {
+#if RS64_DIAG
     static const int s_target = env_int("ROGUESQ_DUMP_FRAME_DL", -1);
     static const bool s_dump_tex = env_on("ROGUESQ_DUMP_TEXTURES");
     static int s_call = 0;
@@ -468,6 +299,9 @@ extern "C" void rs64_dump_frame_dl(uint8_t* rdram, uint32_t dl_phys) {
     fprintf(stderr, "[frame-dl-dump call=%d] TEXRECT count=%d bbox px=(%d,%d)-(%d,%d) cimg=0x%08X\n",
             call, tr_n, tr_minx, tr_miny, tr_maxx, tr_maxy, last_cimg);
     fflush(stderr);
+#else
+    (void)rdram; (void)dl_phys;
+#endif
 }
 
 // FB-guards bit 1 (default off): rewrite any G_SETCIMG whose 24-bit address falls outside the real
