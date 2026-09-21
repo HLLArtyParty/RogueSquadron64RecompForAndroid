@@ -147,6 +147,8 @@ click fires the secondary weapon. `Esc` releases capture (and pauses).
 
 In Debug builds F1/F3/F4 also toggle RT64 developer tools.
 
+F1 toggles RT64's ImGui overlay (configuration, texture dumping, per-call debugger, render-target view). F3 toggles ViewRDRAM mode and F4 toggles texture replacement.
+
 ### Rebinding controls
 
 Press **F6** to open the **Controls** window. Click **Rebind** on any action and
@@ -168,8 +170,10 @@ Issues:
 - Particle effect's complex meshes doesn't completely respect z-depth sorting compared with their 2D quad sprite effects. Causing meshes to appear in front of a 2D sprite effect when they're really behind it.
 - Crashing after completing a level (still completes and receives medal, just crashes a bit after)
 
-- Random crashes after long play sessions which are probably from memory filling up via debug variables/maps/arrays. (Needs **serious** cleanup)
+- Random crashes after long play session on Debug builds which is from memory filling up via debug variables/maps/arrays. (Needs **serious** cleanup)
 - Cutscenes having screen sizes of varying widths which could genuinely be an issue with the game itself.
+
+- **THIS HAS NOT BEEN BUILT/TESTED ON MACOS OR LINUX. Your mileage may vary.**
 
 ---
 
@@ -227,8 +231,6 @@ Run `RogueSquadron64Recomp.exe --help` for the full list. The common options:
 | `--set NAME=VALUE` | Set any `ROGUESQ_*` variable directly |
 
 Each option maps to a `ROGUESQ_*` environment variable, which still works (a bare `NAME=VALUE` argument does too). The full debug/trace/experiment catalog — logging categories, DL/texture dumps, message-order traces, and rendering A/B toggles — lives in [docs/debug-trace-env-vars.md](docs/debug-trace-env-vars.md); reach any of those from the command line with `--set NAME=VALUE`.
-
-With the inspector enabled, F1 toggles RT64's ImGui overlay (configuration, texture dumping, per-call debugger, render-target view). F3 toggles ViewRDRAM mode and F4 toggles texture replacement, or pauses the debugger while an inspector window is focused.
 
 **F5** toggles Factor 5's own built-in frame-profiler HUD (a dormant retail feature, gated by one RDRAM byte). Bars: yellow = CPU (frame submit), blue = RSP/geometry, red = RDP total; magenta/white/green are the RDP command/raster/texture breakdown, fed genuine RT64 workload proxies (draw calls / triangles / texture loads) since the PC path has no RDP hardware counters — scale them with `ROGUESQ_DRAW_SCALE` / `ROGUESQ_TRIS_SCALE` / `ROGUESQ_TEX_SCALE`. `ROGUESQ_PROFILER_DUMP=1` logs the raw slot values.
 
