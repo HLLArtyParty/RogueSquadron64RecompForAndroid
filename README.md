@@ -164,6 +164,10 @@ which you can also hand-edit.
 
 Issues:
 
+- Performance hitches in spots (although not as bad as the n64 game)
+- Particle effect's complex meshes doesn't completely respect z-depth sorting compared with their 2D quad sprite effects. Causing meshes to appear in front of a 2D sprite effect when they're really behind it.
+- Crashing after completing a level (still completes and receives medal, just crashes a bit after)
+
 - Random crashes after long play sessions which are probably from memory filling up via debug variables/maps/arrays. (Needs **serious** cleanup)
 - Cutscenes having screen sizes of varying widths which could genuinely be an issue with the game itself.
 
