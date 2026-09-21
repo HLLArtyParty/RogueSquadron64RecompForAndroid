@@ -75,11 +75,18 @@ if (MSVC)
     # warning instead of an error (plain MSVC cl ignores this flag).
     target_compile_options(RecompiledFuncs PRIVATE
         -Wno-implicit-function-declaration
-        -Wno-error=implicit-function-declaration)
+        -Wno-error=implicit-function-declaration
+        # clang-cl: the recompiler emits scratch locals (hi/lo/result/c1cs) that
+        # many generated functions never use. /wd4101 only covers MSVC C4101.
+        -Wno-unused-variable)
     # Force-include our MEM_WU macro header (fills the unsigned-word gap in
     # upstream recomp.h without modifying it). See include/rsp_dpc_macros.h.
     target_compile_options(RecompiledFuncs PRIVATE
         /FI${CMAKE_SOURCE_DIR}/include/rsp_dpc_macros.h)
+    # clang-cl enables TBAA at -O2; the recompiled code type-puns RDRAM through
+    # MEM_* constantly, so strict aliasing miscompiles it in Release (garbage
+    # framebuffer pointers in the built DL). Match the non-MSVC branch.
+    target_compile_options(RecompiledFuncs PRIVATE -fno-strict-aliasing)
     # Rename game's 'main' to avoid MSVC treating it as the entry point
     target_compile_definitions(RecompiledFuncs PRIVATE main=rs_main)
 else()
