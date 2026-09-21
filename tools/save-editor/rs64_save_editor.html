@@ -133,6 +133,9 @@
   .chk:hover{border-color:var(--accent)}
   .chk input{appearance:auto;-webkit-appearance:checkbox;width:15px;height:15px;margin:0;accent-color:var(--accent);flex:none}
   .chk .code{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--muted);letter-spacing:.02em}
+  .chk-disabled{opacity:.5;cursor:not-allowed}
+  .chk-disabled:hover{border-color:var(--line)}
+  .chk-disabled input{cursor:not-allowed}
   .skinsel{font-family:var(--body);font-size:13px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);min-width:260px;max-width:100%}
   @media (max-width:480px){.row3{grid-template-columns:1fr}}
 </style>
@@ -183,7 +186,7 @@
     <h2>Pilot accounts</h2>
     <p class="hint">Three save slots. Toggle a slot active to include it; the selected slot is the one the game loads first. Click a level tile to cycle its medal: none &rarr; bronze &rarr; silver &rarr; gold.</p>
     <div class="grid-pilots" id="pilots"></div>
-    <p class="note">Names are stored as up to 4 bytes (the game uses 3 arcade-style initials). Medal slots cover 19 level entries. &ldquo;Current level&rdquo; is the highest reached (0&ndash;16). <b>Weapon upgrades</b> are the per-pilot unlock word (<span class="mono">account +0x0C</span>).</p>
+    <p class="note">Names are 3 arcade-style initials (stored as 3 bytes plus a null terminator). Medal slots cover 19 level entries. &ldquo;Current level&rdquo; is the highest reached (0&ndash;16). <b>Weapon upgrades</b> are the per-pilot unlock word (<span class="mono">account +0x0C</span>).</p>
   </section>
 
   <section class="panel" id="tab-elite" role="tabpanel" hidden>
@@ -291,7 +294,7 @@
     {title:"Menus & extras",items:[
       {bit:0x00080000,name:"Music menu",code:"MAESTRO"},
       {bit:0x00100000,name:"Cutscene viewer",code:"DIRECTOR"},
-      {bit:0x00200000,name:"Credits",code:"CREDITS"},
+      {bit:0x00200000,name:"Credits",code:"CREDITS",disabled:true,note:"No effect when set here. The CREDITS code only plays the credits when typed live on the in-game passcode screen; the saved flag surfaces no menu option."},
       {bit:0x00000020,name:"Dev team photo",code:"BLAMEUS"}]},
     {title:"Luke skins",exclusive:true,items:[
       {bit:0x00000080,name:"R. Henke",code:"ICHHELD"},
@@ -409,7 +412,7 @@
         '<div class="toprow"><h3>Slot '+(i+1)+'</h3>'+
           '<label class="switch"><input type="checkbox" data-act="'+i+'"'+(active?' checked':'')+'>Active</label></div>'+
         '<div class="row2">'+
-          '<div class="field"><label>Name</label><input class="mono" maxlength="4" data-name="'+i+'" value="'+name.replace(/"/g,'')+'"></div>'+
+          '<div class="field"><label>Name</label><input class="mono" maxlength="3" data-name="'+i+'" value="'+name.replace(/"/g,'')+'"></div>'+
           '<div class="field"><label>Current level</label><select data-lvl="'+i+'">'+levelOpts(lvl)+'</select></div>'+
         '</div>'+
         '<label class="pick"><input type="radio" name="selacct" data-sel="'+i+'"'+(u8(bodyO(REC[0],0x51))===i?' checked':'')+'><span>Pre-select profile</span>'+
@@ -492,7 +495,8 @@
       } else {
         html+='<div class="chkgrid">';
         for(var k=0;k<grp.items.length;k++){ var it=grp.items[k], on=(w & it.bit)>>>0!==0;
-          html+='<label class="chk"><input type="checkbox" data-bit="'+it.bit+'"'+(on?' checked':'')+'><span>'+it.name+'</span><span class="code">'+it.code+'</span></label>';
+          var tt=it.note?(' title="'+it.note.replace(/"/g,'&quot;')+'"'):'';
+          html+='<label class="chk'+(it.disabled?' chk-disabled':'')+'"'+tt+'><input type="checkbox" data-bit="'+it.bit+'"'+(on?' checked':'')+(it.disabled?' disabled':'')+'><span>'+it.name+'</span><span class="code">'+it.code+'</span></label>';
         }
         html+='</div>';
       }

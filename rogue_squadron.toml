@@ -332,28 +332,6 @@ value = 0x00000000
 # func_8003DFA0 = cinematic outer loop (gates: B40+0x04, B40+0x21, B50 bit5,
 # B58 bit25); func_800A5D80 = inner loop (advances on a1==2 or B50 bit5).
 [[patches.hook]]
-func = "mainGameLoop"
-text = '''{
-    static int s_log = -1;
-    if (s_log < 0) {
-        const char* e = getenv("ROGUESQ_LOG_HOOKS");
-        s_log = (e && *e && *e != '0') ? 1 : 0;
-    }
-    if (s_log) {
-        static int s_count = 0;
-        ++s_count;
-        if (s_count <= 4 || (s_count & 63) == 0) {
-            extern void rs64_dbg_log4(const char* tag, unsigned a, unsigned b, unsigned c, unsigned d);
-            uint32_t b04 = (uint32_t)MEM_BU(0xB44, (gpr)0xFFFFFFFF80130000ULL);
-            uint32_t b21 = (uint32_t)MEM_BU(0xB61, (gpr)0xFFFFFFFF80130000ULL);
-            uint32_t b50 = (uint32_t)MEM_W(0xB50, (gpr)0xFFFFFFFF80130000ULL);
-            uint32_t b58 = (uint32_t)MEM_W(0xB58, (gpr)0xFFFFFFFF80130000ULL);
-            rs64_dbg_log4("8003DFA0 b40+04 b40+21 B50 B58", b04, b21, b50, b58);
-        }
-    }
-}'''
-
-[[patches.hook]]
 func = "cinematicLoopBody"
 text = '''{
     // Cinematic is running, so attribution is over: clear g_current_scene here
@@ -517,53 +495,6 @@ func = "dpInterruptHandlerThread"
 vram = 0x8001C3C4
 value = 0x00000000
 
-# Diagnostic: trace DP-handler entry + iterations (is the thread alive/ticking?).
-[[patches.hook]]
-func = "dpInterruptHandlerThread"
-text = '''{
-    extern void rs64_dbg_log4(const char* tag, unsigned a, unsigned b, unsigned c, unsigned d);
-    rs64_dbg_log4("dpHandler ENTRY", 0, 0, 0, 0);
-}'''
-
-[[patches.hook]]
-func = "dpInterruptHandlerThread"
-before_vram = 0x8001C380
-text = '''{
-    static unsigned s_iters = 0;
-    extern void rs64_dbg_log4(const char* tag, unsigned a, unsigned b, unsigned c, unsigned d);
-    unsigned n = ++s_iters;
-    if (n <= 4 || (n & 31) == 0) {
-        rs64_dbg_log4("dpHandler iter", n, 0, 0, 0);
-    }
-}'''
-
-# Diagnostic: cinematicInitializer entry + cineState (0x800B0934; non-zero =
-# early-exit). ROGUESQ_LOG_HOOKS=1.
-[[patches.hook]]
-func = "cinematicInitializer"
-text = '''{
-    static int s_log = -1;
-    if (s_log < 0) {
-        const char* e = getenv("ROGUESQ_LOG_HOOKS");
-        s_log = (e && *e && *e != '0') ? 1 : 0;
-    }
-    if (s_log) {
-        static int s_count = 0;
-        int n = ++s_count;
-        unsigned cineState_pre = (unsigned)MEM_W(0X934, S32(0X800B << 16));
-        if (n <= 4 || (n & 63) == 0) {
-            extern void rs64_dbg_log4(const char* tag, unsigned a, unsigned b, unsigned c, unsigned d);
-            rs64_dbg_log4("cineInit n cineState_pre a0 a1", n, cineState_pre, (unsigned)ctx->r4, (unsigned)ctx->r5);
-        }
-    }
-}'''
-
-# func_800C28F0 = attribution screen (menuOverlayInit action 9, first screen
-# after boot). Entry log only.
-[[patches.hook]]
-func = "runMenuModelViewerScreen"   # was func_800C28F0 (renamed in syms); 0x800C28F0 = its entry
-text = '''{ extern void rs64_dbg_log4(const char*, unsigned, unsigned, unsigned, unsigned); rs64_dbg_log4("runMenuModelViewerScreen ENTRY (was func_800C28F0, attribution screen)", 0, 0, 0, 0); }'''
-
 # Attribution pacing (0x800C29F8). Default: pace to the real VI retrace so the
 # producer emits the full glyph set (fixes the white/partial-draw race + gives
 # ~2s duration). ROGUESQ_ATTRIB_HOLD_MS>0 forces the old fixed sleep instead
@@ -581,6 +512,21 @@ text = '''{
     if (s_force_sleep < 0) { const char* e = getenv("ROGUESQ_ATTRIB_HOLD_MS"); s_force_sleep = (e && *e) ? 1 : 0; }
     if (s_force_sleep) { if (s_ms > 0) { extern void rs64_sleep_ms(unsigned); rs64_sleep_ms((unsigned)s_ms); } }
     else { extern void rs64_attrib_wait_vi(void); rs64_attrib_wait_vi(); }
+}'''
+
+# Credits pacing (0x800c14a8 = loop top of runMenuShipSelectScreen, the credits
+# sequence — misnamed in the ELF syms). Same race as the attribution screen: the
+# un-paced fade loop free-runs and starves the VI-driven glyph-layout producer, so
+# each frame emits only a partial glyph set (dropped letters, worse in the fast
+# fade-in than the scroll). Pace to the real VI retrace so the producer keeps up.
+# ROGUESQ_CREDITS_NOPACE=1 disables (A/B against the bug).
+[[patches.hook]]
+func = "runMenuShipSelectScreen"
+before_vram = 0x800c14a8
+text = '''{
+    static int s_off = -1;
+    if (s_off < 0) { const char* e = getenv("ROGUESQ_CREDITS_NOPACE"); s_off = (e && *e && *e != '0') ? 1 : 0; }
+    if (!s_off) { extern void rs64_attrib_wait_vi(void); rs64_attrib_wait_vi(); }
 }'''
 
 # menuOverlayInit dispatch log (ROGUESQ_LOG_HOOKS=1; action=r5, mode=r6) and

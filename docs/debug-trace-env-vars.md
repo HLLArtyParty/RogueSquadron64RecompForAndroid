@@ -50,10 +50,8 @@ Everything below is debug/diagnostic and stays variable-only.
 | `ROGUESQ_LOG_WALK_PROFILE` | off | `[walkprof]` on walks over 20ms | Per-opcode timing inside the F5 display-list walk; dumps command count and the hottest opcodes for a slow walk. |
 | `ROGUESQ_LOG_MESG_TRACE` | off | thread/message-order trace | Message-order trace for `tools/validate/compare_mesg_trace.py`. Scope to frames with `ROGUESQ_MESG_TRACE_FRAMES=lo-hi`. |
 | `ROGUESQ_LOG_FRAMEQ` | off | `[frameq]` | Every send/recv on the frame-protocol queues (SP/DP done, DP event, VI event, video queue, frame mutex, task queue). The last line tells which thread stopped calling the OS. |
-| `ROGUESQ_CINE_WATCHDOG` | off | `[cine-progress]` / `[cine-watchdog]` | Enables the cinematic freeze watchdog thread (progress log + freeze stack-dump sampler). Off by default; the iter counter still ticks either way. |
-| `ROGUESQ_CINE_DUMPS` / `ROGUESQ_CINE_DUMP_SPACING_MS` | 3 / 3000 | `[cine-watchdog]` | Number and spacing of the watchdog's stack samples (requires `ROGUESQ_CINE_WATCHDOG=1`). Each sample also prints the frame queues, flag bytes and the buffer-arbiter slot table. Widen the spacing so samples land after the screen under test. |
 | `ROGUESQ_MESG_TRACE_FRAMES` | all | (companion to `ROGUESQ_LOG_MESG_TRACE`) | Frame window `lo-hi` to limit the message-order trace. |
-| `ROGUESQ_DUMP_FRAME_DL` | off | one-shot display-list dump | Dump the display list for frame `N` to disk for offline `f5_dl_walk.py` inspection. |
+| `ROGUESQ_DUMP_FRAME_DL` | off | one-shot display-list dump | Dump the display list for frame `N` to disk for offline `f5_dl_walk.py` inspection. Debug builds only. |
 | `ROGUESQ_DUMP_TEXTURES` | off | one-shot texture dump | Write loaded textures to disk once, for asset diffing. |
 
 ## Workaround / experiment env vars (separate from logging)
