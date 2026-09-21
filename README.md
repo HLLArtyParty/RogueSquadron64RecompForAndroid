@@ -242,9 +242,9 @@ Each option maps to a `ROGUESQ_*` environment variable, which still works (a bar
 
 <img alt="Factor5's built-in profiler" src="./docs/ProfilerBars.PNG">
 
+- Yellow Bar  = CPU; it grows toward full width as a scene exceeds 'frame budget'.
 - Blue bar    = render/geometry cost (RSP + display-list processing)
 - Red bar     = rasterization/fill cost (RDP)
-- Yellow Bar  = CPU; it grows toward full width as a scene exceeds 'frame budget'.
 - Magenta Bar = RDP* cmd-buffer busy (DPC_BUFBUSY) -> draw-call count (per State::flush)
 - White Bar   = RDP* pipe busy (DPC_PIPEBUSY)      -> drawCall.triangleCount
 - Green Bar   = RDP* TMEM busy (DPC_TMEM)          -> drawCall.loadCount
