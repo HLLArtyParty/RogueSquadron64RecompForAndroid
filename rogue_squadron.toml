@@ -796,3 +796,75 @@ text = '''{ extern void rs64_wait_gfx_parse_yield(uint8_t*, recomp_context*); rs
 func = "emitFrameRdpInitDl"
 text = '''{ extern void rs64_wait_gfx_parse_yield(uint8_t*, recomp_context*); rs64_wait_gfx_parse_yield(rdram, ctx); }'''
 
+
+
+# Custom main-menu entries (e.g. QUIT). Config: roguesq_menu.json. Logic in
+# src/main/menu_config.cpp. This runs in the setupMenuData common tail, after
+# num_menu_entries (+0x95) is written and before the active-bitmask strlen loop,
+# so appended entries activate automatically.
+[[patches.hook]]
+func = "setupMenuData"
+before_vram = 0x800BAF70   # after `sb $s3,0x95($v1)`; before the active-bit loop
+text = '''{ extern void rs64_menu_install_main(uint8_t* rdram); rs64_menu_install_main(rdram); }'''
+
+# Intercept confirm on a custom entry. This instruction is only reached when
+# A/Start was pressed (masked+branched at 0x800B51A8), so no button re-check.
+[[patches.hook]]
+func = "menuControllerInput"
+before_vram = 0x800B51B8   # `lbu $v0,0x28($v0)` — selected entry's sub-type
+text = '''{ extern void rs64_menu_confirm_main(uint8_t* rdram); rs64_menu_confirm_main(rdram); }'''
+
+# Sync each Sound Settings mod slider's channel byte to its @export value.
+[[patches.hook]]
+func = "updateMenuPerFrame"
+text = '''{ extern void rs64_slider_sync(uint8_t* rdram); rs64_slider_sync(rdram); }'''
+
+# Redirect a mod slider's channel index (sp+0xEF) to its unused settings byte so
+# its value is independent of the real audio channels. Common slider handler entry.
+[[patches.hook]]
+func = "menuControllerInput"
+before_vram = 0x800B5920
+text = '''{ extern void rs64_slider_redirect(uint8_t* rdram, unsigned sp); rs64_slider_redirect(rdram, (unsigned)ctx->r29); }'''
+
+# Override a mod slider's OFF/MAX endpoint text (getGameOrFrontText textId 0xB7/0xB8).
+# Hook the jr-ra; the delay slot computes v0=v1+v0, so zero v1 and set v0.
+[[patches.hook]]
+func = "getGameOrFrontText"
+before_vram = 0x800558C4
+text = '''{ extern unsigned rs64_gof_override(uint8_t* rdram, unsigned textId); unsigned s = rs64_gof_override(rdram, (unsigned)ctx->r4); if (s) { ctx->r3 = 0; ctx->r2 = (gpr)(int32_t)s; } }'''
+
+# Custom PAUSE-menu "QUIT TO DESKTOP" entry (in-mission). Logic in menu_config.cpp.
+# Append the entry to the root pause array each frame (idempotent; the overlay
+# re-DMAs the array on load). Entry uses textId 0xF000 (sentinel).
+[[patches.hook]]
+func = "initOrUpdatePauseScreenDim"
+text = '''{ extern void rs64_pause_install(uint8_t* rdram); rs64_pause_install(rdram); }'''
+
+# Substitute the displayed label for any of our marked pause entries. Sentinels
+# (nextMenu in 0xF010+) map to a button behavior in menu_config.cpp; the label
+# helper returns the right string (live ON/OFF for toggles) or 0 if not ours.
+# r20 = &entry.textId, so entry.nextMenu is at +0x2. We override r2 (the label
+# pointer) before the sprintf %s consumes it.
+[[patches.hook]]
+func = "runPauseMenuStateMachine"
+before_vram = 0x800C3550
+text = '''{
+    extern unsigned rs64_pause_label_for(uint8_t* rdram, unsigned marker);
+    unsigned v = rs64_pause_label_for(rdram, MEM_HU(0x2, ctx->r20));
+    if (v) ctx->r2 = (gpr)(int32_t)v;
+}'''
+
+# Run the button behavior when a marked pause entry is confirmed. r18 = &entry,
+# so entry.nextMenu is at +0x4.
+[[patches.hook]]
+func = "initOrUpdatePauseScreenDim"
+before_vram = 0x800C2458   # andi 0x20 on the selected entry's flags
+text = '''{
+    extern void rs64_pause_confirm(uint8_t* rdram, unsigned marker);
+    rs64_pause_confirm(rdram, MEM_HU(0x4, ctx->r18));
+}'''
+
+[[patches.hook]]
+func = "traverseSceneGraphRecursive"
+before_vram = 0x800155E4   # jal convertMat3x4ToN64Mtx: a0=ring dst slot, s2=scene node
+text = '''{ extern void rs64_f5_map_node(unsigned, unsigned); rs64_f5_map_node((unsigned)ctx->r4, (unsigned)ctx->r18); }'''

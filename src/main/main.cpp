@@ -15,6 +15,7 @@ static unsigned g_rs64_audio_underruns = 0;   // dry-queue arrivals (see queue_s
 #include "ultramodern/events.hpp"
 #include "librecomp/game.hpp"
 #include "librecomp/rsp.hpp"
+#include "librecomp/mods.hpp"
 #include "common/rt64_common.h"
 #include "imgui/imgui.h"
 #include "rhi/rt64_render_hooks.h"
@@ -1093,6 +1094,12 @@ static bool fake_controller_enabled() {
     return s;
 }
 
+// Requested by the custom main-menu QUIT entry (menuControllerInput hook).
+// Pushes SDL_QUIT so the event loop runs the graceful shutdown path.
+extern "C" void rs64_menu_request_quit(void) {
+    SDL_Event q; q.type = SDL_QUIT; SDL_PushEvent(&q);
+}
+
 // Active bindings + mouse-steering runtime state. poll_input and get_n64_input
 // run on the same game thread and in a paired sequence per controller read, so
 // the mouse accumulators are plain game-thread statics. g_mouse_capture is read
@@ -1105,13 +1112,33 @@ static float                 g_mouse_ax = 0.0f;   // accumulated relative motion
 static float                 g_mouse_ay = 0.0f;
 static uint32_t              g_mouse_btn = 0;
 
+// Fullscreen: set/toggled from any thread (menu, UI); applied on the main thread
+// in poll_input via SDL_SetWindowFullscreen (RT64 resizes its swapchain off the
+// resulting resize event). g_sdl_window is set in create_window.
+SDL_Window*                  g_sdl_window = nullptr;
+static std::atomic<bool>     g_fullscreen{false};
+static std::atomic<bool>     g_fullscreen_dirty{false};
+
+extern "C" void rs64_set_fullscreen(int on)   { g_fullscreen.store(on != 0); g_fullscreen_dirty.store(true); }
+extern "C" int  rs64_get_fullscreen(void)     { return g_fullscreen.load() ? 1 : 0; }
+extern "C" void rs64_toggle_fullscreen(void)  { g_fullscreen.store(!g_fullscreen.load()); g_fullscreen_dirty.store(true); }
+
+static void apply_fullscreen_if_requested() {
+    if (g_fullscreen_dirty.exchange(false) && g_sdl_window) {
+        SDL_SetWindowFullscreen(g_sdl_window, g_fullscreen.load() ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+    }
+}
+
 static void poll_input() {
+    apply_fullscreen_if_requested();
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         // F6 toggles the controls/rebind window; grave toggles mouse-steering
         // capture; Esc releases capture or closes the controls window.
         if (e.type == SDL_KEYDOWN && e.key.repeat == 0) {
-            if (e.key.keysym.scancode == SDL_SCANCODE_F6) {
+            if (e.key.keysym.scancode == SDL_SCANCODE_RETURN && (e.key.keysym.mod & KMOD_ALT)) {
+                rs64_toggle_fullscreen();   // Alt+Enter: standard fullscreen toggle
+            } else if (e.key.keysym.scancode == SDL_SCANCODE_F6) {
                 g_show_controls.store(!g_show_controls.load());
             } else if (e.key.keysym.scancode == SDL_SCANCODE_F5) {
                 // Toggle Factor 5's built-in frame-profiler/debug-text HUD.
@@ -1307,6 +1334,11 @@ static void draw_controls_ui() {
             ImGui::Checkbox("Invert Y", &g_bindings.mouse_invert_y);
         }
         ImGui::TextDisabled("Backtick toggles mouse-steering; F6 or Esc closes this.");
+        {
+            bool fs = rs64_get_fullscreen() != 0;
+            if (ImGui::Checkbox("Fullscreen", &fs)) rs64_set_fullscreen(fs);
+            ImGui::SameLine(); ImGui::TextDisabled("(Alt+Enter)");
+        }
         ImGui::Separator();
 
         // Edge-detect a captured input while a rebind is pending.
@@ -1370,6 +1402,88 @@ static void draw_controls_ui() {
     if (!open) g_show_controls.store(false);
 }
 
+extern "C" void rs64_menu_config_mark_dirty(void);   // menu_config.cpp
+extern "C" void rs64_menu_config_init(void);         // menu_config.cpp
+
+// Render one mod config-schema option as an ImGui widget and persist edits.
+static void draw_mod_config_option(const std::string& mod_id, const recomp::mods::ConfigOption& opt) {
+    using namespace recomp::mods;
+    ConfigValueVariant v = get_mod_config_value(mod_id, opt.id);
+    bool changed = false;
+    switch (opt.type) {
+        case ConfigOptionType::Enum: {
+            const auto& e = std::get<ConfigOptionEnum>(opt.variant);
+            int cur = std::holds_alternative<uint32_t>(v) ? (int)std::get<uint32_t>(v) : (int)e.default_value;
+            std::vector<const char*> items; items.reserve(e.options.size());
+            for (const auto& s : e.options) items.push_back(s.c_str());
+            if (ImGui::Combo(opt.name.c_str(), &cur, items.data(), (int)items.size())) {
+                set_mod_config_value(mod_id, opt.id, (uint32_t)cur); changed = true;
+            }
+            break;
+        }
+        case ConfigOptionType::Number: {
+            const auto& n = std::get<ConfigOptionNumber>(opt.variant);
+            double dv = std::holds_alternative<double>(v) ? std::get<double>(v) : n.default_value;
+            float f = (float)dv;
+            if (ImGui::SliderFloat(opt.name.c_str(), &f, (float)n.min, (float)n.max)) {
+                set_mod_config_value(mod_id, opt.id, (double)f); changed = true;
+            }
+            break;
+        }
+        case ConfigOptionType::String: {
+            const auto& s = std::get<ConfigOptionString>(opt.variant);
+            std::string cur = std::holds_alternative<std::string>(v) ? std::get<std::string>(v) : s.default_value;
+            char buf[128]; std::snprintf(buf, sizeof buf, "%s", cur.c_str());
+            if (ImGui::InputText(opt.name.c_str(), buf, sizeof buf)) {
+                set_mod_config_value(mod_id, opt.id, std::string(buf)); changed = true;
+            }
+            break;
+        }
+        default: break;
+    }
+    if (!opt.description.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", opt.description.c_str());
+    if (changed) rs64_menu_config_mark_dirty();
+}
+
+// A "Mods" panel: lists loaded mods, an enable toggle, and each mod's
+// config-schema options (rendered from librecomp's mod system).
+static void draw_mods_ui() {
+    if (!g_show_controls.load()) return;
+    ImGui::SetNextWindowSize(ImVec2(460, 380), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Mods")) {
+        auto mods = recomp::mods::get_all_mod_details("rs64");
+        if (mods.empty()) ImGui::TextDisabled("No mods loaded. Put mods in the 'mods' folder.");
+        for (const auto& d : mods) {
+            ImGui::PushID(d.mod_id.c_str());
+            bool enabled = recomp::mods::is_mod_enabled(d.mod_id);
+            if (ImGui::Checkbox("##enabled", &enabled)) {
+                recomp::mods::enable_mod(d.mod_id, enabled);
+                rs64_menu_config_mark_dirty();
+            }
+            ImGui::SameLine();
+            const char* title = d.display_name.empty() ? d.mod_id.c_str() : d.display_name.c_str();
+            if (ImGui::CollapsingHeader(title)) {
+                if (!d.description.empty()) ImGui::TextWrapped("%s", d.description.c_str());
+                const auto& schema = recomp::mods::get_mod_config_schema(d.mod_id);
+                if (schema.options.empty()) ImGui::TextDisabled("(no options)");
+                for (const auto& opt : schema.options) {
+                    ImGui::PushID(opt.id.c_str());
+                    draw_mod_config_option(d.mod_id, opt);
+                    ImGui::PopID();
+                }
+            }
+            ImGui::PopID();
+        }
+    }
+    ImGui::End();
+}
+
+// The single ImGui render hook draws both dev panels.
+static void draw_dev_ui() {
+    draw_controls_ui();
+    draw_mods_ui();
+}
+
 // ---------------------------------------------------------------------------
 // Graphics (SDL2 window creation — rt64 takes over from here)
 // ---------------------------------------------------------------------------
@@ -1400,6 +1514,7 @@ ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::
         fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
         exit(EXIT_FAILURE);
     }
+    extern SDL_Window* g_sdl_window; g_sdl_window = sdl_window;
 #if defined(_WIN32)
     SDL_SysWMinfo wm{};
     SDL_VERSION(&wm.version);
@@ -1423,6 +1538,11 @@ void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
     // intercepts F1-F4 here (filters run before SDL_PollEvent dequeues), so
     // the controller-input poll on the game thread never sees those keys.
     SDL_PumpEvents();
+
+    // Build the menu config once here on the main thread (early, before the menu),
+    // so the game-thread menu hooks never do the file I/O + mod-mutex work that
+    // config() does on its first call -- that races with menu-audio init.
+    { static bool s_cfg = false; if (!s_cfg) { s_cfg = true; rs64_menu_config_init(); } }
 
     // Mouse-steering capture: relative mode on only while engaged and focused.
     // Toggled from the game thread (grave/Esc in poll_input); applied here on the
@@ -1808,7 +1928,7 @@ int main(int argc, char* argv[]) {
         }
         fflush(stderr);
     }
-    RT64::SetRenderHookImgui(&draw_controls_ui);
+    RT64::SetRenderHookImgui(&draw_dev_ui);
 
 #ifdef _WIN32
     // Log PE base so we can resolve absolute addresses from SEH logs to RVAs
