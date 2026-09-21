@@ -155,25 +155,15 @@ binding. Adjust mouse sensitivity and invert there, then **Save** (or **Restore
 defaults**). Bindings persist to `roguesq_input.json` next to the executable,
 which you can also hand-edit.
 
-> In Debug builds (developer mode on by default) the RT64 inspector owns the
-> ImGui overlay, so press **F1** once before **F6**. Release builds open the
-> Controls window with **F6** directly.
+> In Debug builds (developer mode on by default) the RT64 inspector owns the ImGui overlay, so press **F1** once before **F6**.
+> Release builds open the Controls window with **F6** directly.
 
 ---
 
 ## Status
 
-The Ambush at Mos Eisley to Jade Moon is confirmed to be playable all the way through.
-
-There might be other edge cases during menu/level transition that might freeze on a black screen (usual a race condition. The solution is *usually* an OS yield)
-
 Issues:
 
-- Some particle effects don't play completely with the 2D quad animated sprite effects get culled, only displaying the ones with complex geometry.
-	- *The sound that's usually paired with these effects also doesn't play*
-
-- Mouse input dropping out despite backtick toggle.
-- Missing/culled quad on underside of the x-wing's s-foils.
 - Random crashes after long play sessions which are probably from memory filling up via debug variables/maps/arrays. (Needs **serious** cleanup)
 - Cutscenes having screen sizes of varying widths which could genuinely be an issue with the game itself.
 
@@ -184,7 +174,7 @@ Issues:
 Recompiled game code (`RecompiledFuncs/`, generated) and hand-written overrides (`patches/`, linked first so their symbols win) compile into one static library, linked against forked builds of N64ModernRuntime (the libultra/runtime host) and RT64 (the renderer). `src/main/` wires it together.
 
 | Path | Role |
-|---|---|
+| --- | --- |
 | `src/main/main.cpp` | Entry point — SDL2 window/audio/input, RSP task dispatch |
 | `src/main/rt64_render_context.cpp` | RT64 integration — `send_dl`, VI registers, framebuffer sanitizer |
 | `src/main/register_overlays.cpp` | Boot-time overlay function-table registration |
@@ -219,7 +209,7 @@ A watchdog thread writes `mqdiag_NNN.txt` message-queue snapshots every 3 second
 Run `RogueSquadron64Recomp.exe --help` for the full list. The common options:
 
 | Option | Effect |
-|---|---|
+| --- | --- |
 | `--gfx-api <vulkan\|d3d12>` | Force the graphics API (default auto) |
 | `--[no-]hle-dev-mode` | RT64 ImGui inspector on F1 (default on in Debug, off in Release) |
 | `--no-vi-driven-loop` | Old host-paced frame loop instead of the hardware protocol (default is VI-driven) |
@@ -238,7 +228,7 @@ With the inspector enabled, F1 toggles RT64's ImGui overlay (configuration, text
 
 **F5** toggles Factor 5's own built-in frame-profiler HUD (a dormant retail feature, gated by one RDRAM byte). Bars: yellow = CPU (frame submit), blue = RSP/geometry, red = RDP total; magenta/white/green are the RDP command/raster/texture breakdown, fed genuine RT64 workload proxies (draw calls / triangles / texture loads) since the PC path has no RDP hardware counters — scale them with `ROGUESQ_DRAW_SCALE` / `ROGUESQ_TRIS_SCALE` / `ROGUESQ_TEX_SCALE`. `ROGUESQ_PROFILER_DUMP=1` logs the raw slot values.
 
-<img src="E:\Projects\RogueSquadron64Recomp\docs\ProfilerBars.PNG">
+<img src="./docs/ProfilerBars.PNG">
 
 - Blue bar    = render/geometry cost (RSP + display-list processing)
 - Red bar     = rasterization/fill cost (RDP)
