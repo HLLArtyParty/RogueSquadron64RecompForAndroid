@@ -170,6 +170,16 @@ while steps < a.max and not ended:
             rec(kind='load', sub=('block' if op == 0xF3 else 'tile'), op=op, chunk=cord(base),
                 src=('0x%06X' % (tex['timg'] or 0)), tile=tile,
                 uls=(w0 >> 12) & 0xFFF, ult=w0 & 0xFFF, lrs=(w1 >> 12) & 0xFFF, dxt=w1 & 0xFFF)
+    if op == 0xFD:                                # SETTIMG (bound texture image)
+        rec(kind='settimg', op=op, chunk=cord(base), addr='0x%06X' % (w1 & 0xFFFFFF), fmt=(w0 >> 21) & 7, siz=(w0 >> 19) & 3)
+    if op == 0xF5:                                # SETTILE (which tile, fmt/siz/tmem)
+        rec(kind='settile', op=op, chunk=cord(base), tile=(w1 >> 24) & 7, fmt=(w0 >> 21) & 7, siz=(w0 >> 19) & 3, line=(w0 >> 9) & 0x1FF, tmem=w0 & 0x1FF)
+    if op == 0xFC:                                # SETCOMBINE
+        rec(kind='combine', op=op, chunk=cord(base), w0='0x%08X' % w0, w1='0x%08X' % w1)
+    if op in (0xB9, 0xBA):                        # SETOTHERMODE_L / _H
+        rec(kind='othermode', op=op, chunk=cord(base), w0='0x%08X' % w0, w1='0x%08X' % w1)
+    if op == 0xBD:                                # billboard sprite
+        rec(kind='bd', op=op, chunk=cord(base), w0='0x%08X' % w0, w1='0x%08X' % w1)
     if op == 0x05 and ((w0 >> 16) & 0xFF) == 5:   # terrain tile: 05 05 02=flat quad, 05 05 00=heightfield grid
         sub = (w0 >> 8) & 0xFF
         payload = ['0x%08X' % W(pc + 8 + i * 4) for i in range(8)]   # words 2..9 of the 40-byte record
