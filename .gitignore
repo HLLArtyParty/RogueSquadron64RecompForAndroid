@@ -114,3 +114,17 @@ skills-lock.json
 *.csv
 /tools/validate/__pycache__
 /plans
+
+# native-demo example mod: separate-build DLL artifacts (built via mods/native-demo/CMakeLists.txt)
+mods/native-demo/build/
+mods/native-demo/native_demo.dll
+mods/native-demo/native_demo.lib
+mods/native-demo/native_demo.exp
+mods/native-demo/native_demo.pdb
+
+# menu-example mod: separate-build DLL artifacts (built via mods/menu-example/CMakeLists.txt)
+mods/menu-example/build/
+mods/menu-example/menu_example.dll
+mods/menu-example/menu_example.lib
+mods/menu-example/menu_example.exp
+mods/menu-example/menu_example.pdb
