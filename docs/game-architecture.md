@@ -1,24 +1,14 @@
 # Star Wars: Rogue Squadron 64 — Game Architecture
 
-> Subsystem map for the recompilation. It documents both the *game* (how
-> Rogue Squadron's N64 code is structured, for the function-renaming effort in
-> `RecompiledFuncs/funcs_*.c`) and the *port* (how the recompiled code is
-> bridged to RT64 + ultramodern, and what it renders and plays).
->
-> The port boots, renders the attribution text, plays the intro cinematic
-> (TIE fighter, X-wing over the Death Star trench, the exploding N64 logo, the
-> Factor 5 logo assembling with its fire, flat terrain tiles) with music and
-> SFX, and reaches the main menu on every recent run. Heightfield terrain and
-> the fire/smoke billboards are not drawn yet — see
+> Subsystem map covering both the *game* (how Rogue Squadron's N64 code is
+> structured, for the renaming effort in `RecompiledFuncs/funcs_*.c`) and the
+> *port* (how it bridges to RT64 + ultramodern). Current status is in
 > [Current status & known blockers](#current-status--known-blockers).
 >
-> Source of truth for symbol names: `E:/Projects/rogue_squadron64/symbol_files/`
-> (`main_overlay.txt`, `cinematic_overlay.txt`, `menu_overlay.txt`,
-> `mission_overlay.txt`, `libultra.txt`, `zlib.txt`). Unnamed globals are written
-> with the splat `D_<ADDR>` convention the recomp uses. Partial m2c decomp + RE
-> notes live in `E:/Projects/rogue_squadron64/docs/`. Hardware truth comes from
-> Project64 RDRAM goldens and message-order traces (`tools/validate/`), and the
-> graphics ucode grammar from its IMEM listing
+> Symbol-name source of truth: `E:/Projects/rogue_squadron64/symbol_files/`
+> (per-overlay `.txt`); unnamed globals use the splat `D_<ADDR>` convention.
+> Hardware truth comes from Project64 RDRAM goldens and message-order traces
+> (`tools/validate/`), and the graphics ucode grammar from its IMEM listing
 > ([f5-model-dl-spec.md §7](f5-model-dl-spec.md)).
 
 ## At a glance
@@ -276,6 +266,10 @@ Main menu state `gCurrentMenuData` (0x800CE730, 0xF8 bytes). 13 menus enumerated
 | `eliteRoguesMenuHandler` (0x800BEA00) | Elite Rogues high-score screen |
 
 Menu UI text is G_TEXRECT (one textured rect per IA16 glyph); the title strip ("STAR WARS / ROGUE SQUADRON") and the photographic background tiles decode and draw. Per-tile positioning is open (see [Rendering pipeline](#rendering-pipeline)).
+
+To add or modify menu entries (front-end or pause menu), see
+[adding-menus-and-buttons.md](adding-menus-and-buttons.md) — the entry data
+model, sub-type dispatch, and a worked "Quit button" example.
 
 ### 10. HUD
 
@@ -618,7 +612,7 @@ in `rt64_render_context.cpp`. `PresentEarly` mode is on by default (opt out with
 
 ### Open items
 
-1. **Parse-versus-rebuild race (fixed 2026-09-08).** The game frees material and frame chunks at frame start, before `submitGfxFrame` waits for the previous task's SP-done, and the next allocation reuses them immediately. Hardware is safe because the RSP is done within a few milliseconds; RT64's parse took 10–100 ms and read rebuilt chunks, producing the garbage walks (thousands of faces per task) and, through a garbage color-image registration at 0x760000, the write-back that corrupted the heap free list (the LucasArts-reveal crash). Fixes: a graphics task counts as in flight from the game's request message until the parse completes; the game thread's frame-start receive and the chunk-release functions wait for it (`ROGUESQ_VI_WAIT_PARSE=0` disables); the host VI thread holds a retrace while a parse is in flight; color images narrower than 16 pixels or not 64-byte aligned are rejected and never written back. After the fix a run shows zero capped tasks, hardware's chunk-hop count and a 0.9 ms average parse.
+1. **Parse-versus-rebuild race (fixed 2026-09-08).** The game frees and reuses material/frame chunks at frame start before `submitGfxFrame` waits for SP-done; hardware is safe because the RSP finishes in a few ms, but RT64's 10–100 ms parse read rebuilt chunks (garbage walks, and a bad color-image at 0x760000 that corrupted the heap free list — the LucasArts-reveal crash). Fix: a graphics task is in flight from the request message until the parse completes; the frame-start receive and chunk-release wait for it (`ROGUESQ_VI_WAIT_PARSE=0` disables); the host VI thread holds a retrace during a parse; color images < 16 px wide or not 64-byte aligned are rejected. Post-fix: zero capped tasks, hardware chunk-hop count, 0.9 ms average parse.
 2. **Heightfield terrain and billboards.** The `05 05 00` record (height grid + color rows, overlays 0x14/0x18) and the fire/smoke sprites are not drawn. Record layouts and overlay disassembly are in [f5-model-dl-spec.md §7](f5-model-dl-spec.md) and the scratch notes.
 3. **Frame pacing.** Three VIs per frame vs two on hardware; with the race fixed the parse averages under 1 ms, so the remaining VI is on the game side of the frame (to be measured).
 4. **Regen-fragile hand edits** in `RecompiledFuncs/funcs_*.c`: the VI-driven gating of the four barrier receives, the yield in `waitForMusyXAudioTaskDone`, the voice key-on un-stub, the guard counters and probes. The KSEG0 guard hooks measured zero fallbacks in a full boot→menu run and can be retired with a regen. The `menuOverlayInit` instruction patch at 0x800C593C nops a callee-save store rather than the branch its comment describes.
@@ -670,7 +664,7 @@ After renaming a symbol (`llvm-objcopy --redefine-sym`):
 - [docs/data-structures.md](data-structures.md) — field-offset layouts for the entity/gameplay objects, global game state, HUD/menu, and cinematic/scene-graph structs.
 - `E:/Projects/rogue_squadron64/symbol_files/` — authoritative symbol names (per-overlay).
 - `E:/Projects/rogue_squadron64/docs/` — per-subsystem detail (HOB/HMT/SND/DAT/save/menus + partial m2c decomp).
-- [docs/audit-changes.md](audit-changes.md) — inventory of every fork modification + the regen-safety migration plan.
+- [docs/audit-changes.md](audit-changes.md) — inventory of fork modifications by category.
 - [docs/f5-model-dl-spec.md](f5-model-dl-spec.md) — display-list grammar; §7 is the ucode-derived truth (chunk fetch, opcodes, terrain records).
 - [docs/factor5-gbi.md](factor5-gbi.md) — Factor 5 graphics microcode docs (older runtime priors).
 - [docs/factor5-ucode-dispatch.md](factor5-ucode-dispatch.md) — dispatch-table notes; its handler readings are offset by 0x80 (see the spec §7).

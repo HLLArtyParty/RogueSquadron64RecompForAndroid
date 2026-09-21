@@ -2,9 +2,9 @@
 
 The N64Recomp / RSPRecomp toolchain emits plain C, so all of Visual Studio's
 normal C/C++ debugger features work on this project unmodified — including
-on the recompiled CPU code under `E:\Projects\N64Recomp\RecompiledFuncs\` and
-the recompiled RSP graphics ucode under `build/factor5_ucode/`. Reaching for
-the debugger before adding more `printf` is almost always faster.
+on the recompiled CPU code under `RecompiledFuncs\` and the recompiled RSP
+graphics ucode under `build/factor5_ucode/`. Reaching for the debugger before
+adding more `printf` is almost always faster.
 
 The recompiler keeps the original MIPS PC of every instruction as a comment,
 e.g. `// 0x800907B0: div.d $f20, $f0, $f2`, so once you have a host-side
@@ -183,11 +183,11 @@ windbg -z RogueSquadron64Recomp.exe
 
 | File | What it is |
 |---|---|
-| `E:\Projects\N64Recomp\RecompiledFuncs\funcs_*.c` | Recompiled CPU code from the rom; thousands of `func_8xxxxxxx` functions. |
+| `RecompiledFuncs\funcs_*.c` | Recompiled CPU code from the ROM; thousands of `func_8xxxxxxx` functions (in-repo, gitignored, regenerated). |
 | `build\factor5_ucode\factor5_ucode_recompiled.c` | Recompiled Factor 5 graphics RSP ucode. The dispatch loop is at `L_1090`; opcode handlers branch from there. |
 | `build\factor5_ucode\factor5_boot_recompiled.c` | Recompiled boot ucode that DMAs the main ucode into IMEM. |
 | `src\rsp\dpc_bridge.cpp` | Where DPC_END writes from the ucode become RT64 RDP submissions. |
-| `lib\rt64\src\hle\rt64_interpreter.cpp` | RT64's HLE display-list interpreter (currently bypassed for Factor 5 — see README). |
+| `lib\rt64\src\hle\rt64_interpreter.cpp` | RT64's HLE display-list interpreter; Factor 5 dispatches through the `GBI_F3DFACTOR5` profile here. |
 
 ## When printf is still the right tool
 

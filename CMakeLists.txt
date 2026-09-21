@@ -75,11 +75,18 @@ if (MSVC)
     # warning instead of an error (plain MSVC cl ignores this flag).
     target_compile_options(RecompiledFuncs PRIVATE
         -Wno-implicit-function-declaration
-        -Wno-error=implicit-function-declaration)
+        -Wno-error=implicit-function-declaration
+        # clang-cl: the recompiler emits scratch locals (hi/lo/result/c1cs) that
+        # many generated functions never use. /wd4101 only covers MSVC C4101.
+        -Wno-unused-variable)
     # Force-include our MEM_WU macro header (fills the unsigned-word gap in
     # upstream recomp.h without modifying it). See include/rsp_dpc_macros.h.
     target_compile_options(RecompiledFuncs PRIVATE
         /FI${CMAKE_SOURCE_DIR}/include/rsp_dpc_macros.h)
+    # clang-cl enables TBAA at -O2; the recompiled code type-puns RDRAM through
+    # MEM_* constantly, so strict aliasing miscompiles it in Release (garbage
+    # framebuffer pointers in the built DL). Match the non-MSVC branch.
+    target_compile_options(RecompiledFuncs PRIVATE -fno-strict-aliasing)
     # Rename game's 'main' to avoid MSVC treating it as the entry point
     target_compile_definitions(RecompiledFuncs PRIVATE main=rs_main)
 else()
@@ -266,13 +273,13 @@ set_source_files_properties(${FACTOR5_UCODE_C} ${FACTOR5_BOOT_C} ${MUSYX_AUDIO_C
 add_executable(RogueSquadron64Recomp
     ${CMAKE_SOURCE_DIR}/src/main/main.cpp
     ${CMAKE_SOURCE_DIR}/src/main/input_bindings.cpp
+    ${CMAKE_SOURCE_DIR}/src/main/menu_config.cpp
     ${CMAKE_SOURCE_DIR}/src/main/rt64_render_context.cpp
     ${CMAKE_SOURCE_DIR}/src/main/register_overlays.cpp
     ${CMAKE_SOURCE_DIR}/src/main/upstream_compat.cpp
     ${CMAKE_SOURCE_DIR}/src/main/hook_helpers.cpp
     ${CMAKE_SOURCE_DIR}/src/rsp/aspMain.cpp
     ${CMAKE_SOURCE_DIR}/src/rsp/dpc_bridge.cpp
-    ${CMAKE_SOURCE_DIR}/src/rsp/dpc_bridge_diag.cpp
     ${FACTOR5_BOOT_C}
     ${FACTOR5_UCODE_C}
     ${MUSYX_AUDIO_C}
@@ -348,6 +355,20 @@ else()
     target_link_libraries(RogueSquadron64Recomp PRIVATE SDL2::SDL2 ${CMAKE_DL_LIBS} Threads::Threads)
 endif()
 
+# Ship the user mods tree next to the exe. Each subfolder of mods/ is a mod;
+# menu_config.cpp scans them for a roguesq_menu.json. copy_directory refreshes them
+# without deleting the user's own mod folders. The example mods (native-demo,
+# menu-example) are self-contained with their own builds (mods/<name>/CMakeLists.txt),
+# so the game build neither compiles their DLLs nor ships them — they are stripped
+# from the staged tree.
+add_custom_command(TARGET RogueSquadron64Recomp POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/mods"
+        $<TARGET_FILE_DIR:RogueSquadron64Recomp>/mods
+    COMMAND ${CMAKE_COMMAND} -E rm -rf
+        "$<TARGET_FILE_DIR:RogueSquadron64Recomp>/mods/native-demo"
+        "$<TARGET_FILE_DIR:RogueSquadron64Recomp>/mods/menu-example")
+
 # PatchesLib is an OBJECT library: its objects go straight onto the exe link
 # line ahead of RecompiledFuncs (the .lib), so the patch definitions win any
 # duplicated symbol via /FORCE:MULTIPLE (object beats archive member).
@@ -363,3 +384,25 @@ target_link_libraries(RogueSquadron64Recomp PRIVATE
 )
 
 set_property(TARGET RogueSquadron64Recomp PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
+# ---- Release packaging ----
+# CMAKE_RUNTIME_OUTPUT_DIRECTORY points every executable target at build/<Config>,
+# so the submodule build tools (file_to_c, re-spirv-cli, texture_hasher/packer,
+# zstd) and the intermediate .libs all land next to the game exe. None are runtime
+# dependencies. For Release, assemble a clean folder holding only what ships.
+if (WIN32)
+    set(RS64_DIST_DIR "${CMAKE_BINARY_DIR}/dist")
+    add_custom_command(TARGET RogueSquadron64Recomp POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E $<IF:$<CONFIG:Release>,make_directory,true> "${RS64_DIST_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E $<IF:$<CONFIG:Release>,copy_if_different,true>
+            "$<TARGET_FILE:RogueSquadron64Recomp>"
+            "$<TARGET_FILE_DIR:RogueSquadron64Recomp>/SDL2.dll"
+            "$<TARGET_FILE_DIR:RogueSquadron64Recomp>/dxil.dll"
+            "$<TARGET_FILE_DIR:RogueSquadron64Recomp>/dxcompiler.dll"
+            "${RS64_DIST_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E $<IF:$<CONFIG:Release>,copy_directory,true>
+            "${CMAKE_SOURCE_DIR}/mods"
+            "${RS64_DIST_DIR}/mods"
+        COMMENT "Assembling clean Release folder in ${RS64_DIST_DIR} (Release only)"
+        VERBATIM)
+endif()

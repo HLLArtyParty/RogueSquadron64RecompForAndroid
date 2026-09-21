@@ -1,11 +1,8 @@
 # Debug Trace Environment Variables
 
-The recompile accumulates many `fprintf(stderr, "[tag] ...")` trace points
-during bug investigation. Most fire dozens or hundreds of lines per second
-and are silent on a healthy run. To keep the terminal usable they are
-gated behind environment-variable flags. This file lists every flag, what
-trace tags it controls, where the code lives, and when you'd want to turn
-it on.
+Trace points are gated behind environment-variable flags; most are silent on a
+healthy run and high-volume when enabled. This file lists every flag, the trace
+tags it controls, and when to turn it on.
 
 ## How to enable
 
@@ -13,13 +10,13 @@ Set the env var to a non-zero value before launching the executable:
 
 **PowerShell / cmd**
 ```
-set ROGUESQ_LOG_DPC=1
+set ROGUESQ_LOG_VI=1
 build\Debug\RogueSquadron64Recomp.exe
 ```
 
 **bash / git-bash**
 ```
-ROGUESQ_LOG_DPC=1 ./build/Debug/RogueSquadron64Recomp.exe
+ROGUESQ_LOG_VI=1 ./build/Debug/RogueSquadron64Recomp.exe
 ```
 
 **Catch-all**: `ROGUESQ_LOG_ALL=1` enables every category at once.
@@ -31,8 +28,8 @@ the environment, by passing it to the executable as `--set NAME=VALUE` (or a
 bare `NAME=VALUE`). These are equivalent:
 
 ```
-RogueSquadron64Recomp.exe --set ROGUESQ_LOG_DPC=1
-ROGUESQ_LOG_DPC=1 RogueSquadron64Recomp.exe
+RogueSquadron64Recomp.exe --set ROGUESQ_LOG_VI=1
+ROGUESQ_LOG_VI=1 RogueSquadron64Recomp.exe
 ```
 
 The common *user-facing* runtime options (graphics API, frame loop, audio,
@@ -44,18 +41,17 @@ Everything below is debug/diagnostic and stays variable-only.
 | Env Var | Default | Tags Enabled | When To Enable |
 |---|---|---|---|
 | `ROGUESQ_LOG_ALL` | off | everything below | Quick "show me everything" — heavy output, OK for one-shot diagnostic. |
-| `ROGUESQ_LOG_DPC` | off | `[task-brief]`, `[task]`, `[task#N gfx]`, `[task#N gfx-FULL]`, `[task#N setcombine]`, `[task#N movemem-idx]`, `[task#N hist]`, `[dpc] FULL_SYNC byte sent`, `[dpc] G_SETPRIM/ENV_COLOR`, `[dpc] PRIM override`, `[dpc] SET_COLOR/DEPTH/TEXTURE_IMAGE`, `[dpc-pak] *`, `[dpc-cine] ENTER`, `[dpc-64tri] ENTER`, `[trace] cinematic_drv ENTRY/BEFORE/AFTER` | Tracing what GFX commands the Factor5 LLE ucode emits. **Highest-volume category** — easily 1000+ lines/sec during cinematic. Use when investigating combiner muxes, texture loads, task pacing, or per-task tri/texrect counts. |
-| `ROGUESQ_LOG_RDP_STATE` | off | `[trace] setCombine #N mux=...`, `[trace] setOtherMode #N cycleType=...`, `[texfilt] tf=...`, `[particle-mux] otherMode...` | RDP-state diagnosis — which combiner/cycleType is active when a specific draw fires. Useful when correlating "what mux runs at frame X" or "did texfilt change between expected and actual". |
-| `ROGUESQ_LOG_PRESENT` | off | `[trace] RT64::Present #N swapIdx=...`, `[trace] PresentQueue::frame #N`, `[trace] Present::lookup`, `[trace] PresentQ::regfb/scratch`, `[trace] fbReg`, `[vi-status] word=...` | VI presentation / framebuffer routing investigations. The buffer-arbiter bug was diagnosed via these traces. Fires ~60 lines/sec. |
-| `ROGUESQ_LOG_SP_TASKS` | off | `[sp] osSpTaskStartGo #N kind=GFX...` | Task-scheduling rate (cinematic ~30/s, normal play 1-2/frame). Useful when tracking how often the game submits GFX tasks to the RSP. |
 | `ROGUESQ_LOG_VI` | off | `[osViSetMode #N ...]`, `[osViSwapBuffer #N fb=...]`, `[osViSetXScale/YScale]`, `[osViBlack]` | The game's VI mode and swap calls as they reach the libultra shims. |
 | `ROGUESQ_LOG_THREADS` | off | `[osDestroyThread] t=... queue=... qok=... chain_ok=...` | Thread teardown with the queue-chain check. A failed check is always printed. |
 | `ROGUESQ_LOG_PIPELINE` | off | `[pipe-1]`, `[pipe-2]`, `[pipe-3]` stage counters in RT64 framebuffer renderer | Per-stage TEXRECT pipeline counters (push → GPU draw). Used to verify the pipeline isn't dropping cinematic content between submission and rasterization. |
 | `ROGUESQ_LOG_GBI` | off | per-handler GBI command logs | Every Factor 5 GBI handler as it fires. **Very high volume.** Use when auditing which opcodes run in a phase. |
 | `ROGUESQ_LOG_GFX_TASK` | off | one line per graphics task | Low-volume task-submission trace; pair with queue diagnostics. |
+| `ROGUESQ_LOG_FRAME_PROFILE` | off | `[frameprof]` per-second + `[frameprof HITCH]` per-spike | Frame period (real fps) and per-hitch phase attribution (walk / snapshot memcpy / present) — locates whether a busy-scene drop is walk-bound, GPU-bound or pacing-bound. |
+| `ROGUESQ_LOG_WALK_PROFILE` | off | `[walkprof]` on walks over 20ms | Per-opcode timing inside the F5 display-list walk; dumps command count and the hottest opcodes for a slow walk. |
 | `ROGUESQ_LOG_MESG_TRACE` | off | thread/message-order trace | Message-order trace for `tools/validate/compare_mesg_trace.py`. Scope to frames with `ROGUESQ_MESG_TRACE_FRAMES=lo-hi`. |
 | `ROGUESQ_LOG_FRAMEQ` | off | `[frameq]` | Every send/recv on the frame-protocol queues (SP/DP done, DP event, VI event, video queue, frame mutex, task queue). The last line tells which thread stopped calling the OS. |
-| `ROGUESQ_CINE_DUMPS` / `ROGUESQ_CINE_DUMP_SPACING_MS` | 3 / 3000 | `[cine-watchdog]` | Number and spacing of the watchdog's stack samples. Each sample also prints the frame queues, flag bytes and the buffer-arbiter slot table. Widen the spacing so samples land after the screen under test. |
+| `ROGUESQ_CINE_WATCHDOG` | off | `[cine-progress]` / `[cine-watchdog]` | Enables the cinematic freeze watchdog thread (progress log + freeze stack-dump sampler). Off by default; the iter counter still ticks either way. |
+| `ROGUESQ_CINE_DUMPS` / `ROGUESQ_CINE_DUMP_SPACING_MS` | 3 / 3000 | `[cine-watchdog]` | Number and spacing of the watchdog's stack samples (requires `ROGUESQ_CINE_WATCHDOG=1`). Each sample also prints the frame queues, flag bytes and the buffer-arbiter slot table. Widen the spacing so samples land after the screen under test. |
 | `ROGUESQ_MESG_TRACE_FRAMES` | all | (companion to `ROGUESQ_LOG_MESG_TRACE`) | Frame window `lo-hi` to limit the message-order trace. |
 | `ROGUESQ_DUMP_FRAME_DL` | off | one-shot display-list dump | Dump the display list for frame `N` to disk for offline `f5_dl_walk.py` inspection. |
 | `ROGUESQ_DUMP_TEXTURES` | off | one-shot texture dump | Write loaded textures to disk once, for asset diffing. |
@@ -82,7 +78,6 @@ they're orthogonal to the log gates above but commonly co-used.
 | `ROGUESQ_F5_CHAIN_CAP` | 256 | Max chunks in one F5 next-link chain before the walker ends the display list (backstop against a stale call walking the free list). 256 = the window `f5_chunk_revisit` can still detect a cycle in. A dense frame legitimately chains ~84 chunks; the previous cap of 64 truncated those lists mid-frame and dropped a contiguous block of terrain (the LucasArts flyover hole). |
 | `ROGUESQ_F5_CULL` | on | Factor 5 cull semantics in `RSP::drawIndexedTri`: only geometry-mode bit 0x2000 culls (back faces); bit 0x1000 is the ucode's texcoord-perspective flag, not G_CULL_FRONT, so it never swaps or culls; both bits = back-face cull. `0` restores the F3DEX reading (0x1000 = CULL_FRONT, both = double-sided via `ROGUESQ_F5_CULLBOTH_DRAW`). |
 | `ROGUESQ_F5_NON` | off | Force `NoN` (No-Near-clipping) for the Factor 5 ucode: `1` disables the GPU hard near-plane clip and uses the far-plane manual clamp instead. F5 uniquely ships `NoN=false`, so `depthClipEnabled=true` discards large geometry as it approaches the camera (objects "culled / lower-detail up close"). A/B fix for that symptom; matches every other `.NoN` ucode. Applied in `RSP::setGBI` (`lib/rt64/src/hle/rt64_rsp.cpp`). |
-| `ROGUESQ_LLE_FORCE` | off | Route `M_GFXTASK` through the recompiled RSP ucode + `dpc_bridge.cpp` instead of RT64 HLE. Diagnostic only — semi-broken (cinematic tasks hit an unhandled jump). Companions `ROGUESQ_LLE_UNGATED` (skip the attribution-page gate) and `ROGUESQ_LLE_SOLO` (skip the HLE fallthrough). |
 
 ### Boot / attract-demo navigation
 
@@ -93,22 +88,21 @@ game RDRAM each present, same pattern as the other pokes.
 | Env Var | Default | Effect |
 |---|---|---|
 | `ROGUESQ_CINE_FASTFWD` | `0` | Adds N extra ticks to the VI-retrace count (`0x8011A890`) each present while the intro cutscene is active and its `gateCtr` (`0x800B0B28`) is below the end threshold (`cutscene[0x44]-0xA`). Inflates the cinematic dt so the intro completes NATURALLY in seconds instead of ~6 min headless. Not a skip — the game still sets its own done bits. Use e.g. `=200`. |
-| `ROGUESQ_SKIP_DEMO` | (unset) | Pins `gGameSettings.demoId` (`0x80130B54`) = N (0-5) every present, and pins the wrap counter `unk15` (`0x80130B55`) = 0 so `cycleIdleDemoId` (`0x8006F044`) can't drift the selector — so the attract mode plays (and LOOPS) that demo directly, skipping earlier demos + transitions. `demoId`→level: **0**=Mos Eisley/Tatooine, **1**=Jade Moon, **2**=Kile II, **3**=Taloraan, **4**=Fest, **5**=Trench Run (`dLevelByDemoId` `0x800CD404` = `00 05 07 0A 0B 11`; `gDemoFilenames` `0x80109AE4`). Combine with `ROGUESQ_CINE_FASTFWD` to blast the intro. Example: `ROGUESQ_SKIP_DEMO=1 ROGUESQ_CINE_FASTFWD=200` → Jade Moon in ~2 min. Selector RE in [plans/jade-moon-demo-freeze-plan.md](../plans/jade-moon-demo-freeze-plan.md). |
-| `ROGUESQ_SKIP_TO_JADEMOON` | off | Convenience alias for `ROGUESQ_SKIP_DEMO=1` (the Jade Moon demo — has the structure-explosion freeze under investigation). |
+| `ROGUESQ_SKIP_DEMO` | (unset) | Pins `gGameSettings.demoId` (`0x80130B54`) = N (0-5) every present, and pins the wrap counter `unk15` (`0x80130B55`) = 0 so `cycleIdleDemoId` (`0x8006F044`) can't drift the selector — so the attract mode plays (and LOOPS) that demo directly, skipping earlier demos + transitions. `demoId`→level: **0**=Mos Eisley/Tatooine, **1**=Jade Moon, **2**=Kile II, **3**=Taloraan, **4**=Fest, **5**=Trench Run (`dLevelByDemoId` `0x800CD404` = `00 05 07 0A 0B 11`; `gDemoFilenames` `0x80109AE4`). Combine with `ROGUESQ_CINE_FASTFWD` to blast the intro. Example: `ROGUESQ_SKIP_DEMO=1 ROGUESQ_CINE_FASTFWD=200` → Jade Moon in ~2 min. |
+| `ROGUESQ_SKIP_TO_JADEMOON` | off | Convenience alias for `ROGUESQ_SKIP_DEMO=1` (the Jade Moon demo). |
 
-### RT64 raster enhancements (Phase 0)
+### RT64 raster enhancements
 
 Opt-in `UserConfiguration` knobs applied in `create_render_context` (`src/main/rt64_render_context.cpp`)
-before `app->setup()`. Raster-only (this build has `RT_ENABLED` off — no RT/DLSS/FSR/XeSS). See
-[plans/rt64-f5-integration-plan.md](../plans/rt64-f5-integration-plan.md). Default baseline is unchanged
-unless set.
+before `app->setup()`. Raster-only (this build has `RT_ENABLED` off — no RT/DLSS/FSR/XeSS). Default
+baseline is unchanged unless set.
 
 | Env Var | Default | Effect |
 |---|---|---|
 | `ROGUESQ_MSAA` | off | Multisample anti-aliasing: `2`/`4`/`8` → MSAA 2x/4x/8x (rounds down; `<2` = None). |
 | `ROGUESQ_RES_SCALE` | (RT64 2x) | Internal render-resolution multiplier; sets `resolution=Manual` + `resolutionMultiplier=<mult>` (e.g. `3.0`). Clamped by RT64's limit in `validate()`. |
 | `ROGUESQ_SSAA` | `1` | Supersample downsample factor (`>=2` renders higher then downsamples — sharper, costlier). |
-| `ROGUESQ_WIDESCREEN` | off | `1` → `aspectRatio=Expand` (fills the window aspect). F5 HUD/2D may need alignment work at non-4:3 (plan Phase 1b). |
+| `ROGUESQ_WIDESCREEN` | off | `1` → `aspectRatio=Expand` (fills the window aspect). F5 HUD/2D may need alignment work at non-4:3. |
 | `ROGUESQ_ASPECT` | (unset) | Force a specific aspect ratio as a decimal `w/h` (e.g. `1.7777`); sets `aspectRatio=Manual`. Takes precedence over `ROGUESQ_WIDESCREEN`. |
 | `ROGUESQ_HDR` | off | `1` → `internalColorFormat=High` (higher-precision internal color target). |
 | `ROGUESQ_TEX_FILTER` | `aa` | Texture filtering: `nearest` / `linear` / `aa` (AntiAliasedPixelScaling). |
@@ -135,7 +129,7 @@ exe (written with defaults on first run). Rebind in-app via **F1 then F6**
    static const bool log_x = []{
        const char *a = std::getenv("ROGUESQ_LOG_ALL");
        if (a && *a && *a != '0') return true;
-       const char *e = std::getenv("ROGUESQ_LOG_DPC");  // your category
+       const char *e = std::getenv("ROGUESQ_LOG_VI");  // your category
        return e && *e && *e != '0';
    }();
    if (log_x) {
@@ -149,7 +143,7 @@ exe (written with defaults on first run). Rebind in-app via **F1 then F6**
    static int log_x_init = 0, log_x = 0;
    if (!log_x_init) {
        const char *a = getenv("ROGUESQ_LOG_ALL");
-       const char *e = getenv("ROGUESQ_LOG_DPC");
+       const char *e = getenv("ROGUESQ_LOG_VI");
        log_x = ((a && *a && *a != '0') || (e && *e && *e != '0')) ? 1 : 0;
        log_x_init = 1;
    }

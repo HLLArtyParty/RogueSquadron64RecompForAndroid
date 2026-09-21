@@ -7,8 +7,13 @@
 #include <string_view>
 #include <vector>
 #include <filesystem>
+#include <fstream>
+#include "SDL.h"
+#include "common/rt64_user_configuration.h"
 
+#ifndef HLSL_CPU
 #define HLSL_CPU
+#endif
 #include "hle/rt64_application.h"
 
 #include "ultramodern/ultramodern.hpp"
@@ -31,7 +36,6 @@ extern "C" unsigned long long rs64_cine_iter_get(void);
 extern "C" volatile int g_boot_pulse_start;          // get_n64_input injects START while set
 extern "C" volatile int g_current_scene;
 // src/main/main.cpp
-extern "C" int rs64_run_lle_gfx(uint8_t* rdram, const OSTask* task);
 extern void print_stack_with_symbols(void** frames, unsigned short count);
 // ultramodern events.cpp
 extern "C" uint8_t* g_rs64_parse_rdram;             // RDRAM snapshot for the current parse
@@ -47,6 +51,12 @@ extern "C" void rs64_sanitize_fb_registry(void);
 
 // Last task's processDisplayLists time, reported by the ROGUESQ_LOG_GFX_TASK line.
 extern "C" volatile long long g_rs64_pdl_us; volatile long long g_rs64_pdl_us = 0;
+// Running total of processDisplayLists CPU time (us) across all tasks; ROGUESQ_LOG_FRAME_PROFILE
+// samples it per present to attribute frame time to DL-walk/submit vs present vs sim.
+extern "C" volatile long long g_rs64_pdl_us_total; volatile long long g_rs64_pdl_us_total = 0;
+extern "C" volatile long long g_rs64_pdl_task_total; volatile long long g_rs64_pdl_task_total = 0;
+// Snapshot memcpy time (us), set on the game thread in events.cpp take_rdram_snapshot.
+extern "C" volatile long long g_rs64_snap_us;
 
 // Set on construction, cleared on shutdown; the LLE DPC bridge submits through it.
 static std::atomic<RT64::Application*> g_rt64_app{nullptr};
@@ -159,12 +169,46 @@ public:
 #else
         const bool dev_mode_default = false;
 #endif
+        using UC = RT64::UserConfiguration;
+        // --- Display config: baseline defaults -> roguesq_video.json -> ROGUESQ_* env overrides ---
         app->userConfig.developerMode = debug || env_on("ROGUESQ_HLE_DEV_MODE", dev_mode_default);
-        app->userConfig.displayBuffering = RT64::UserConfiguration::DisplayBuffering::Triple;
+        app->userConfig.displayBuffering = UC::DisplayBuffering::Triple;
+        app->userConfig.threePointFiltering = false;             // GPU bilinear on all textures
+        // Frame interpolation OFF by default: it smooths rigid objects but F5's pooled effect quads
+        // flicker and vertex-morphed terrain stutters under it (no clean per-object classifier found).
+        // ROGUESQ_RT_INTERP=<hz> re-enables it; the majority-vote pacing + node-id paths stay behind it.
+        app->userConfig.refreshRate = UC::RefreshRate::Original;
+        app->userConfig.refreshRateTarget = 60;
 
-        // Opt-in RT64 raster knobs; the default baseline is untouched.
+        // roguesq_video.json next to the exe (same convention as roguesq_input.json): present keys
+        // override the baseline above; a default file is written on first run so every RT64 display
+        // setting is discoverable/editable. RT64's to_json/from_json handle the enums as strings.
+        // The ROGUESQ_* env vars below still override the file (dev/testing escape hatch).
         {
-            using UC = RT64::UserConfiguration;
+            std::string cfgPath;
+            if (char* base = SDL_GetBasePath()) { cfgPath = base; SDL_free(base); }
+            cfgPath += "roguesq_video.json";
+            video_cfg_path_ = cfgPath;                           // enables F1-menu save-back
+            json baseJson = app->userConfig;                     // baseline as json (ADL to_json)
+            std::ifstream in(cfgPath);
+            if (in.is_open()) {
+                try {
+                    json fileJson; in >> fileJson;
+                    baseJson.update(fileJson);                   // file overrides baseline keys
+                    app->userConfig = baseJson.get<UC>();        // ADL from_json (absent keys keep baseline)
+                    app->userConfig.validate();
+                    fprintf(stderr, "[RT64] loaded %s\n", cfgPath.c_str());
+                } catch (const std::exception &e) {
+                    fprintf(stderr, "[RT64] roguesq_video.json parse error (%s); using defaults\n", e.what());
+                }
+            } else if (std::ofstream out{cfgPath, std::ios::trunc}) {
+                out << baseJson.dump(2) << "\n";
+                fprintf(stderr, "[RT64] wrote default %s\n", cfgPath.c_str());
+            }
+        }
+
+        // ROGUESQ_* overrides (win over the file); each acts only when its var is explicitly set.
+        {
             // ROGUESQ_MSAA=2|4|8: multisample anti-aliasing (default off).
             if (env_str("ROGUESQ_MSAA")) {
                 int s = env_int("ROGUESQ_MSAA");
@@ -205,20 +249,37 @@ public:
                 app->userConfig.internalColorFormat = UC::InternalColorFormat::High;
                 fprintf(stderr, "[RT64] HDR internal color format\n");
             }
-            // ROGUESQ_TEX_FILTER=nearest|linear|aa: texture filtering.
+            // ROGUESQ_TEX_FILTER=nearest|linear|aa. This drives BOTH the VI present-time upscale
+            // (userConfig.filtering) AND the per-texture sampler (userConfig.threePointFiltering).
+            // The per-texture bit is the one that actually filters game textures: threePointFiltering
+            // off => flags.linearFiltering forced on for every draw => GPU bilinear on ALL tiles,
+            // including G_TF_POINT sprites (the point-sampled explosion/HUD quads). The upscale filter
+            // alone (what we set before) does not touch the game textures, so "linear" looked inert.
             if (const char* v = env_str("ROGUESQ_TEX_FILTER")) {
                 std::string_view s(v);
-                if (s == "nearest") app->userConfig.filtering = UC::Filtering::Nearest;
-                else if (s == "linear") app->userConfig.filtering = UC::Filtering::Linear;
+                if (s == "nearest") { app->userConfig.filtering = UC::Filtering::Nearest; app->userConfig.threePointFiltering = true; }
+                else if (s == "linear") { app->userConfig.filtering = UC::Filtering::Linear; app->userConfig.threePointFiltering = false; }
                 else if (s == "aa") app->userConfig.filtering = UC::Filtering::AntiAliasedPixelScaling;
-                fprintf(stderr, "[RT64] filtering=%s\n", v);
+                fprintf(stderr, "[RT64] filtering=%s threePoint=%d\n", v, app->userConfig.threePointFiltering ? 1 : 0);
             }
-            // ROGUESQ_RT_INTERP=<hz>: RT64 frame interpolation (default off = refreshRate Original).
-            if (env_on("ROGUESQ_RT_INTERP")) {
-                int hz = env_int("ROGUESQ_RT_INTERP"); if (hz < 20) hz = 60;
-                app->userConfig.refreshRate = UC::RefreshRate::Manual;
-                app->userConfig.refreshRateTarget = hz;
-                fprintf(stderr, "[RT64] frame interpolation ON (Manual %d Hz)\n", hz);
+            // ROGUESQ_THREE_POINT=0|1: per-texture sampler independent of the upscale filter.
+            // 0 = GPU bilinear on all textures; 1 = N64 3-point (faithful; point on G_TF_POINT tiles).
+            if (const char* v = env_str("ROGUESQ_THREE_POINT")) {
+                app->userConfig.threePointFiltering = (v[0] != '0');
+                fprintf(stderr, "[RT64] threePointFiltering=%d\n", app->userConfig.threePointFiltering ? 1 : 0);
+            }
+            // ROGUESQ_RT_INTERP=0 disables frame interpolation; =<hz> sets a target (raster-only,
+            // does not touch the logic tick). Baseline is ON at 60 Hz; only overrides when set.
+            if (const char* v = env_str("ROGUESQ_RT_INTERP")) {
+                if (v[0] == '0') {
+                    app->userConfig.refreshRate = UC::RefreshRate::Original;
+                    fprintf(stderr, "[RT64] frame interpolation OFF\n");
+                } else {
+                    int hz = env_int("ROGUESQ_RT_INTERP"); if (hz < 20) hz = 60;
+                    app->userConfig.refreshRate = UC::RefreshRate::Manual;
+                    app->userConfig.refreshRateTarget = hz;
+                    fprintf(stderr, "[RT64] frame interpolation ON (Manual %d Hz)\n", hz);
+                }
             }
         }
 
@@ -242,6 +303,9 @@ public:
                 fprintf(stderr, "[RT64] graphics API forced to D3D12 via ROGUESQ_GFX_API\n");
             }
         }
+
+        // Snapshot the resolved config; update_screen rewrites roguesq_video.json when the F1 menu edits it.
+        try { json snap = app->userConfig; video_cfg_snapshot_ = snap.dump(); } catch (...) {}
 
         uint32_t thread_id = 0;
 #ifdef _WIN32
@@ -310,7 +374,6 @@ public:
 
     void send_dl(const OSTask* task) override {
         if (!app) return;
-        if (run_lle_task(task)) return;
         dump_ucode_once(task);
         log_task(task);
         run_hle_task(task);
@@ -325,7 +388,82 @@ public:
         poll_gamestate();
         dump_rdram_if_armed();
         log_vi_state();
+        maybe_persist_video_cfg();
+        const auto pres0 = std::chrono::high_resolution_clock::now();
         app->updateScreen();
+        frame_profile(pres0);
+    }
+
+    // ROGUESQ_LOG_FRAME_PROFILE=1: once/sec, attribute frame time to its phases so a busy-scene
+    // drop can be classified CPU-bound (DL walk/submit), GPU/present-bound, or sim/pacing-bound.
+    //   present : actual presents/sec (the real framerate)
+    //   period  : wall time between presents, ms (min/avg/max) -- spikes = the drops
+    //   dl      : processDisplayLists us/present (CPU DL translate+submit) + tasks/present
+    //   present : app->updateScreen() us (submit + any GPU/vsync wait)
+    //   other   : period - dl - present = game-thread sim + scheduler + idle
+    void frame_profile(std::chrono::high_resolution_clock::time_point pres0) {
+        static const bool s_on = env_on("ROGUESQ_LOG_FRAME_PROFILE", false);
+        if (!s_on) return;
+        const auto now = std::chrono::high_resolution_clock::now();
+        const long long pres_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(now - pres0).count();
+
+        static bool s_have_prev = false;
+        static std::chrono::high_resolution_clock::time_point s_prev, s_win0;
+        static long long s_pdl_base = 0, s_task_base = 0;
+        static long long s_period_min = 0, s_period_max = 0, s_period_sum = 0;
+        static long long s_pres_sum = 0, s_pres_max = 0;
+        static int s_frames = 0;
+
+        if (!s_have_prev) {
+            s_have_prev = true; s_prev = now; s_win0 = now;
+            s_pdl_base = g_rs64_pdl_us_total; s_task_base = g_rs64_pdl_task_total;
+            s_period_min = s_period_max = s_period_sum = 0; s_frames = 0;
+            s_pres_sum = s_pres_max = 0;
+            return;
+        }
+        const long long period_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(now - s_prev).count();
+        s_prev = now;
+        // Per-hitch attribution: on a long present interval, dump the most-recent walk + snapshot
+        // costs so a 30-76ms spike can be routed to walk-bound / memcpy-bound / pacing-bound.
+        //   walk_last : last F5 processDisplayLists (Gfx Thread) us -- includes any GPU-barrier wait
+        //   snap_us   : last RDRAM snapshot memcpy (game thread) us
+        //   present_us: this update_screen() us (submit + present wait)
+        constexpr long long kHitchUs = 25000;
+        if (period_us > kHitchUs) {
+            fprintf(stderr,
+                "[frameprof HITCH] period=%.1fms walk_last=%.1fms snap=%.1fms present=%.2fms\n",
+                period_us / 1000.0, g_rs64_pdl_us / 1000.0, g_rs64_snap_us / 1000.0,
+                pres_us / 1000.0);
+            fflush(stderr);
+        }
+        if (s_frames == 0 || period_us < s_period_min) s_period_min = period_us;
+        if (period_us > s_period_max) s_period_max = period_us;
+        s_period_sum += period_us;
+        s_pres_sum += pres_us;
+        if (pres_us > s_pres_max) s_pres_max = pres_us;
+        ++s_frames;
+
+        const long long win_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(now - s_win0).count();
+        if (win_us >= 1000000 && s_frames > 0) {
+            const long long dl_us = g_rs64_pdl_us_total - s_pdl_base;
+            const long long dl_tasks = g_rs64_pdl_task_total - s_task_base;
+            const double fps = s_frames * 1e6 / (double)win_us;
+            fprintf(stderr,
+                "[frameprof] present=%.1f fps | period ms min/avg/max=%.1f/%.1f/%.1f | "
+                "dl us/frame=%.0f tasks/frame=%.1f | present us avg/max=%.0f/%lld | other ms/frame=%.1f\n",
+                fps,
+                s_period_min / 1000.0, (s_period_sum / (double)s_frames) / 1000.0, s_period_max / 1000.0,
+                dl_us / (double)s_frames, dl_tasks / (double)s_frames,
+                s_pres_sum / (double)s_frames, s_pres_max,
+                ((s_period_sum - dl_us - s_pres_sum) / (double)s_frames) / 1000.0);
+            fflush(stderr);
+            s_win0 = now; s_pdl_base = g_rs64_pdl_us_total; s_task_base = g_rs64_pdl_task_total;
+            s_period_min = s_period_max = s_period_sum = 0; s_frames = 0;
+            s_pres_sum = s_pres_max = 0;
+        }
     }
 
     void shutdown() override {
@@ -349,6 +487,24 @@ public:
 
 private:
     int vi_count_ = 0;
+    std::string video_cfg_path_;      // roguesq_video.json next to the exe ("" = disabled)
+    std::string video_cfg_snapshot_;  // last-persisted userConfig json; F1-menu edits rewrite the file
+
+    // Persist F1-menu display changes back to roguesq_video.json. The menu edits app->userConfig
+    // in place (State::ext.userConfig points at it), so a throttled dirty-check catches changes.
+    void maybe_persist_video_cfg() {
+        if (video_cfg_path_.empty() || !app) return;
+        if ((vi_count_ % 15) != 0) return;                 // ~4x/sec; config changes are rare
+        std::string cur;
+        try { json j = app->userConfig; cur = j.dump(); } catch (...) { return; }
+        if (cur == video_cfg_snapshot_) return;
+        video_cfg_snapshot_ = cur;
+        std::ofstream out(video_cfg_path_, std::ios::trunc);
+        if (out.is_open()) {
+            try { out << json::parse(cur).dump(2) << "\n"; } catch (...) {}
+            fprintf(stderr, "[RT64] saved %s (menu change)\n", video_cfg_path_.c_str());
+        }
+    }
 
     // RDRAM accessors, byte-swapped (index ^ 3) and bounds-checked.
     uint8_t rd8(uint32_t addr) const {
@@ -369,29 +525,6 @@ private:
 
     // ---- send_dl ----
 
-    // ROGUESQ_LLE_FORCE=1: diagnostic only. Runs the recompiled RSP ucode and feeds the RDP
-    // bytes through dpc_bridge. Gated to the attribution DL page (0x80720000) because cinematic
-    // tasks hit an unhandled jump in the recompiled ucode; ROGUESQ_LLE_UNGATED=1 lifts the gate,
-    // ROGUESQ_LLE_SOLO=1 skips the HLE pass. See AGENTS.md dead ends.
-    bool run_lle_task(const OSTask* task) {
-        static const bool s_force = env_on("ROGUESQ_LLE_FORCE");
-        if (!s_force) return false;
-        static const bool s_ungated = env_on("ROGUESQ_LLE_UNGATED");
-        static const bool s_solo = env_on("ROGUESQ_LLE_SOLO");
-        const uint32_t dlp = (uint32_t)task->t.data_ptr;
-        const bool in_attribution_page = ((dlp & 0xFFFF0000u) == 0x80720000u);
-        if (!s_ungated && !in_attribution_page) return false;
-        static int s_n = 0;
-        int n = ++s_n;
-        int r = rs64_run_lle_gfx(app->core.RDRAM, task);
-        if (n <= 8 || (n & 31) == 0) {
-            fprintf(stderr, "[lle send_dl #%d] gate=%s exit=%d ucode=0x%08X dl=0x%08X\n",
-                    n, in_attribution_page ? "attr" : "ungated", r, (unsigned)task->t.ucode, dlp);
-            fflush(stderr);
-        }
-        return s_solo;
-    }
-
     // ROGUESQ_DUMP_UCODE=path: one-shot IMEM + DMEM dump for offline disassembly.
     void dump_ucode_once(const OSTask* task) {
         static const char* s_path = env_str("ROGUESQ_DUMP_UCODE");
@@ -404,7 +537,7 @@ private:
         auto write_region = [&](const char* suffix, uint32_t phys, uint32_t size) {
             char path[512];
             snprintf(path, sizeof path, "%s.%s.bin", s_path, suffix);
-            FILE* f = fopen(path, "wb");
+            FILE* f = recomp::os::fopen(path, "wb");
             if (!f) return;
             std::vector<uint8_t> buf(size);
             for (uint32_t i = 0; i < size; ++i) buf[i] = rd8(phys + i);
@@ -450,6 +583,14 @@ private:
             fflush(stderr);
         }
         app->state->rsp->reset();
+        // ROGUESQ_INTERP_RATE=<hz> pins the game's logical rate, bypassing RT64's VI-factor detection
+        // (setRefreshRate -> extended.refreshRate wins over logicalRateFromFactors). "auto"/"strict"
+        // are handled in logicalRateFromFactors; only a numeric value forces a fixed rate here.
+        {
+            static const int s_rate = [](){ const char* e = env_str("ROGUESQ_INTERP_RATE");
+                if (!e || !e[0]) return 0; int v = atoi(e); return (v >= 10 && v <= 60) ? v : 0; }();
+            if (s_rate) app->state->setRefreshRate((uint16_t)s_rate);
+        }
         app->interpreter->loadUCodeGBI(task->t.ucode & 0x3FFFFFF, task->t.ucode_data & 0x3FFFFFF, true);
 #ifdef _WIN32
         static std::atomic<int> s_seh_streak{0};
@@ -498,6 +639,8 @@ private:
         app->state->writeBackRDRAM = nullptr;
         g_rs64_pdl_us = (long long)std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::high_resolution_clock::now() - pdl0).count();
+        g_rs64_pdl_us_total += g_rs64_pdl_us;
+        g_rs64_pdl_task_total += 1;
         rs64_sanitize_fb_registry();
 
         static int s_n = 0;
@@ -770,7 +913,7 @@ private:
             std::snprintf(tag, sizeof tag, "cine_iter%llu", it);
             if (s_next < s_iters.size()) {
                 char path2[512]; std::snprintf(path2, sizeof path2, "dumps/rdram_%s.bin", tag);
-                if (FILE* f2 = fopen(path2, "wb")) {
+                if (FILE* f2 = recomp::os::fopen(path2, "wb")) {
                     static uint8_t buf2[0x10000];
                     for (uint32_t base = 0; base < 0x800000u; base += sizeof buf2) {
                         for (uint32_t i = 0; i < sizeof buf2; ++i) buf2[i] = app->core.RDRAM[(base + i) ^ 3];
@@ -814,7 +957,7 @@ private:
         char path[512];
         if (const char* p = env_str("ROGUESQ_DUMP_RDRAM_PATH")) std::snprintf(path, sizeof path, "%s", p);
         else std::snprintf(path, sizeof path, "dumps/rdram_%s.bin", tag);
-        FILE* f = fopen(path, "wb");
+        FILE* f = recomp::os::fopen(path, "wb");
         if (f) {
             static uint8_t buf[0x10000];
             for (uint32_t base = 0; base < 0x800000u; base += sizeof buf) {

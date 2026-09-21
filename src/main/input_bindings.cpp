@@ -118,7 +118,7 @@ Bindings default_bindings() {
     add(Target::DpadDown, key(SDL_SCANCODE_F2));    // standard view
     add(Target::DpadRight,key(SDL_SCANCODE_F3));    // close view
     add(Target::LTrig,    key(SDL_SCANCODE_F4));    // switch view
-    add(Target::CUp,      key(SDL_SCANCODE_F5));    // look around
+    add(Target::CUp,      key(SDL_SCANCODE_F8));    // look around (F5 = profiler HUD host hotkey)
     add(Target::DpadLeft, key(SDL_SCANCODE_Z));     // drop camera
 
     // --- Mouse (flight steering) ---
@@ -126,6 +126,7 @@ Bindings default_bindings() {
     add(Target::StickDown,  max(1, +1)); add(Target::StickUp,   max(1, -1));  // SDL y-down -> N64 up
     add(Target::B,     mb(SDL_BUTTON_LEFT));        // fire blasters
     add(Target::CLeft, mb(SDL_BUTTON_RIGHT));       // fire secondary
+    add(Target::A,     mb(SDL_BUTTON_MIDDLE));      // menu confirm
 
     // --- Gamepad (mirrors the prior hardcoded map) ---
     add(Target::A,     pb(SDL_CONTROLLER_BUTTON_A));
