@@ -25,15 +25,16 @@
 
 #include <cstdlib>
 #include <cstring>
+#include "os_compat.h"
 
 namespace recomp::dbg {
 
 // Cached env-var read. Returns true iff the variable is set to a non-zero
 // non-"false"/"no" value, OR the catch-all ROGUESQ_LOG_ALL is enabled.
 inline bool env_flag(const char *name) {
-    const char *all = std::getenv("ROGUESQ_LOG_ALL");
+    const char *all = recomp::os::getenv("ROGUESQ_LOG_ALL");
     if (all && *all && *all != '0') return true;
-    const char *e = std::getenv(name);
+    const char *e = recomp::os::getenv(name);
     if (!e || !*e) return false;
     if (*e == '0') return false;
     if (std::strcmp(e, "false") == 0) return false;
@@ -55,7 +56,7 @@ inline bool log_threads() {
 }
 
 // Behaviour knobs, read at the call site. Unlike env_flag, ROGUESQ_LOG_ALL does not turn these on.
-inline const char* env_str(const char* name) { const char* v = std::getenv(name); return (v && *v) ? v : nullptr; }
+inline const char* env_str(const char* name) { const char* v = recomp::os::getenv(name); return (v && *v) ? v : nullptr; }
 inline bool env_on(const char* name, bool def = false) { const char* v = env_str(name); return v ? (*v != '0') : def; }
 inline int env_int(const char* name, int def = 0) { const char* v = env_str(name); return v ? std::atoi(v) : def; }
 inline unsigned env_u32(const char* name) { const char* v = env_str(name); return v ? (unsigned)std::strtoul(v, nullptr, 0) : 0u; }

@@ -151,8 +151,8 @@ static void rs64_cine_dump_if_stuck(void) {
     static std::atomic<int> s_dumps{0};
     static std::atomic<uint64_t> s_last_dump{0};
     // ROGUESQ_CINE_DUMPS / ROGUESQ_CINE_DUMP_SPACING_MS: sample count (3) and spacing (3000).
-    static const int s_max = [](){ const char* e = std::getenv("ROGUESQ_CINE_DUMPS"); int v = e ? atoi(e) : 3; return v > 0 ? v : 3; }();
-    static const uint64_t s_spacing = [](){ const char* e = std::getenv("ROGUESQ_CINE_DUMP_SPACING_MS"); long v = e ? atol(e) : 3000; return (uint64_t)(v > 0 ? v : 3000); }();
+    static const int s_max = [](){ const char* e = recomp::os::getenv("ROGUESQ_CINE_DUMPS"); int v = e ? atoi(e) : 3; return v > 0 ? v : 3; }();
+    static const uint64_t s_spacing = [](){ const char* e = recomp::os::getenv("ROGUESQ_CINE_DUMP_SPACING_MS"); long v = e ? atol(e) : 3000; return (uint64_t)(v > 0 ? v : 3000); }();
     if (s_dumps.load(std::memory_order_relaxed) >= s_max) return;
     uint64_t last = g_cine_last_ms.load(std::memory_order_relaxed);
     if (last == 0) return;
@@ -191,7 +191,7 @@ static void rs64_cine_dump_if_stuck(void) {
 }
 
 static void rs64_write_rdram_be(const uint8_t* rd, const char* path, const char* why) {
-    FILE* f = fopen(path, "wb");
+    FILE* f = recomp::os::fopen(path, "wb");
     if (f) {
         static uint8_t buf[0x10000];
         for (uint32_t base = 0; base < 0x800000u; base += sizeof buf) {
@@ -209,6 +209,11 @@ static void rs64_write_rdram_be(const uint8_t* rd, const char* path, const char*
 // RDRAM to ROGUESQ_DUMP_RDRAM_PATH (default dumps/rdram_cine_stall.bin).
 // ROGUESQ_DUMP_STACKS_ON_DEMO_STALL=<ms>: demo cursor (0x80109AE0) unchanged that long -> all stacks.
 static void rs64_cine_start_watchdog_thread(void) {
+    // Off by default; the progress log + freeze stack-dump sampler are diagnostic only.
+    // ROGUESQ_CINE_WATCHDOG=1 re-enables. The iter counter (rs64_cine_iter_get) still ticks
+    // regardless, so cine-hold / DL-dump snapshots are unaffected.
+    static const bool s_enabled = [](){ const char* e = recomp::os::getenv("ROGUESQ_CINE_WATCHDOG"); return e && atoi(e) != 0; }();
+    if (!s_enabled) return;
     static std::atomic<bool> s_started{false};
     if (s_started.exchange(true, std::memory_order_relaxed)) return;
     std::thread([]() {
@@ -336,8 +341,61 @@ extern "C" void rs64_dump_frame_dl(uint8_t* rdram, uint32_t dl_phys) {
     static const bool s_dump_tex = env_on("ROGUESQ_DUMP_TEXTURES");
     static int s_call = 0;
     const int call = ++s_call;
+
+    // ROGUESQ_MEDAL_PROBE=1: on EVERY gfx task, scan the DL for the menu medal/insignia
+    // layer (fmt4 textures 0x62xxxx) and log the color image active at that draw. Catches
+    // the intermittent overlay-refresh pass a fixed dump window misses, and resolves whether
+    // the medal draws are emitted-to-a-bad-target vs never emitted (walk desync).
+    {
+        static const int s_medal = env_on("ROGUESQ_MEDAL_PROBE") ? 1 : 0;
+        if (s_medal && dl_phys != 0) {
+            static uint8_t s_pv[0x800000 >> 3];
+            memset(s_pv, 0, sizeof(s_pv));
+            uint32_t pa = (dl_phys & 0x3FFFFFFu) | 0x80000000u;
+            uint32_t p_cimg = 0, p_cimg_w0 = 0, p_cimg_at = 0;
+            uint32_t pstack[16]; int psp = 0; int pjmp = 256;
+            for (int i = 0; i < 16384; ++i) {
+                if ((pa & 0x3FFFFFFu) + 8u > 0x800000u) break;
+                uint32_t vi = (pa & 0x3FFFFFFu) >> 3;
+                if (s_pv[vi]) break;
+                s_pv[vi] = 1;
+                uint32_t w0 = (uint32_t)MEM_W(0, (gpr)(int32_t)pa);
+                uint32_t w1 = (uint32_t)MEM_W(4, (gpr)(int32_t)pa);
+                uint8_t op = (uint8_t)(w0 >> 24);
+                if (op == 0xB4 || op == 0xBE) { pa += 16u; continue; }
+                if (op == 0xB5 && (w1 & 0x00FFFFFFu) != 0u) { pa = (w1 & 0x00FFFFF8u) | 0x80000000u; continue; }
+                if (op == 0xFF) { p_cimg = w1; p_cimg_w0 = w0; p_cimg_at = pa; }
+                if (op == 0xFD) {
+                    uint32_t timg = w1 & 0x00FFFFFFu;
+                    if (timg >= 0x620000u && timg < 0x628000u) {
+                        static int s_n = 0;
+                        if (++s_n <= 60) {
+                            uint32_t ca = p_cimg & 0x00FFFFFFu;
+                            bool bad = (p_cimg == 0) || ca < 0x100000u || ca >= 0x800000u;
+                            fprintf(stderr, "[medal-probe] task=%d tex=0x%06X activeCIMG=0x%08X (w0=0x%08X @0x%08X) %s texcmd@0x%08X\n",
+                                    call, timg, p_cimg, p_cimg_w0, p_cimg_at, bad ? "GARBAGE" : "ok", pa);
+                            fflush(stderr);
+                        }
+                        break;
+                    }
+                }
+                if (op == 0xE4 || op == 0xE5) { pa += 24u; continue; }
+                if (op == 0x03) { pa += 24u; continue; }
+                if (op == 0xB8u || op == 0xDFu) { if (psp > 0) { pa = pstack[--psp]; continue; } break; }
+                bool is_dl = ((op == 0x06u) && ((w0 & 0x00FEFFFFu) == 0u)) || (op == 0xDEu);
+                if (is_dl && pjmp > 0) {
+                    uint8_t br = (uint8_t)(w0 >> 16);
+                    uint32_t tgt = (w1 & 0x00FFFFF8u) | 0x80000000u;
+                    if (br == 0 && psp < 16) pstack[psp++] = pa + 8u;
+                    pa = tgt; pjmp--; continue;
+                }
+                pa += 8u;
+            }
+        }
+    }
+
     if (s_target < 0 || call < s_target || call >= s_target + 16 || dl_phys == 0) return;
-    const bool full_detail = (call == s_target);
+    const bool full_detail = (call <= s_target + 1);
 
     uint32_t a = (dl_phys & 0x3FFFFFFu) | 0x80000000u;
     uint32_t dstack[16]; int dsp = 0; int djmp = 256;
@@ -381,7 +439,7 @@ extern "C" void rs64_dump_frame_dl(uint8_t* rdram, uint32_t dl_phys) {
             snprintf(path, sizeof(path), "dumps/tex/%06X_fmt%u_siz%u.bin", timg, fmt, siz);
             static int s_made = 0;
             if (!s_made) { s_made = 1; system("if not exist dumps\\tex mkdir dumps\\tex"); }
-            FILE* tf = fopen(path, "wb");
+            FILE* tf = recomp::os::fopen(path, "wb");
             if (tf) {
                 for (uint32_t k = 0; k < 0x2000u; ++k) { uint32_t off = timg + k; fputc(off < 0x800000u ? rdram[off ^ 3] : 0, tf); }
                 fclose(tf);

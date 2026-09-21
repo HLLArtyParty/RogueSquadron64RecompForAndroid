@@ -11,7 +11,9 @@
 #include "SDL.h"
 #include "common/rt64_user_configuration.h"
 
+#ifndef HLSL_CPU
 #define HLSL_CPU
+#endif
 #include "hle/rt64_application.h"
 
 #include "ultramodern/ultramodern.hpp"
@@ -49,6 +51,12 @@ extern "C" void rs64_sanitize_fb_registry(void);
 
 // Last task's processDisplayLists time, reported by the ROGUESQ_LOG_GFX_TASK line.
 extern "C" volatile long long g_rs64_pdl_us; volatile long long g_rs64_pdl_us = 0;
+// Running total of processDisplayLists CPU time (us) across all tasks; ROGUESQ_LOG_FRAME_PROFILE
+// samples it per present to attribute frame time to DL-walk/submit vs present vs sim.
+extern "C" volatile long long g_rs64_pdl_us_total; volatile long long g_rs64_pdl_us_total = 0;
+extern "C" volatile long long g_rs64_pdl_task_total; volatile long long g_rs64_pdl_task_total = 0;
+// Snapshot memcpy time (us), set on the game thread in events.cpp take_rdram_snapshot.
+extern "C" volatile long long g_rs64_snap_us;
 
 // Set on construction, cleared on shutdown; the LLE DPC bridge submits through it.
 static std::atomic<RT64::Application*> g_rt64_app{nullptr};
@@ -381,7 +389,81 @@ public:
         dump_rdram_if_armed();
         log_vi_state();
         maybe_persist_video_cfg();
+        const auto pres0 = std::chrono::high_resolution_clock::now();
         app->updateScreen();
+        frame_profile(pres0);
+    }
+
+    // ROGUESQ_LOG_FRAME_PROFILE=1: once/sec, attribute frame time to its phases so a busy-scene
+    // drop can be classified CPU-bound (DL walk/submit), GPU/present-bound, or sim/pacing-bound.
+    //   present : actual presents/sec (the real framerate)
+    //   period  : wall time between presents, ms (min/avg/max) -- spikes = the drops
+    //   dl      : processDisplayLists us/present (CPU DL translate+submit) + tasks/present
+    //   present : app->updateScreen() us (submit + any GPU/vsync wait)
+    //   other   : period - dl - present = game-thread sim + scheduler + idle
+    void frame_profile(std::chrono::high_resolution_clock::time_point pres0) {
+        static const bool s_on = env_on("ROGUESQ_LOG_FRAME_PROFILE", false);
+        if (!s_on) return;
+        const auto now = std::chrono::high_resolution_clock::now();
+        const long long pres_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(now - pres0).count();
+
+        static bool s_have_prev = false;
+        static std::chrono::high_resolution_clock::time_point s_prev, s_win0;
+        static long long s_pdl_base = 0, s_task_base = 0;
+        static long long s_period_min = 0, s_period_max = 0, s_period_sum = 0;
+        static long long s_pres_sum = 0, s_pres_max = 0;
+        static int s_frames = 0;
+
+        if (!s_have_prev) {
+            s_have_prev = true; s_prev = now; s_win0 = now;
+            s_pdl_base = g_rs64_pdl_us_total; s_task_base = g_rs64_pdl_task_total;
+            s_period_min = s_period_max = s_period_sum = 0; s_frames = 0;
+            s_pres_sum = s_pres_max = 0;
+            return;
+        }
+        const long long period_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(now - s_prev).count();
+        s_prev = now;
+        // Per-hitch attribution: on a long present interval, dump the most-recent walk + snapshot
+        // costs so a 30-76ms spike can be routed to walk-bound / memcpy-bound / pacing-bound.
+        //   walk_last : last F5 processDisplayLists (Gfx Thread) us -- includes any GPU-barrier wait
+        //   snap_us   : last RDRAM snapshot memcpy (game thread) us
+        //   present_us: this update_screen() us (submit + present wait)
+        constexpr long long kHitchUs = 25000;
+        if (period_us > kHitchUs) {
+            fprintf(stderr,
+                "[frameprof HITCH] period=%.1fms walk_last=%.1fms snap=%.1fms present=%.2fms\n",
+                period_us / 1000.0, g_rs64_pdl_us / 1000.0, g_rs64_snap_us / 1000.0,
+                pres_us / 1000.0);
+            fflush(stderr);
+        }
+        if (s_frames == 0 || period_us < s_period_min) s_period_min = period_us;
+        if (period_us > s_period_max) s_period_max = period_us;
+        s_period_sum += period_us;
+        s_pres_sum += pres_us;
+        if (pres_us > s_pres_max) s_pres_max = pres_us;
+        ++s_frames;
+
+        const long long win_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(now - s_win0).count();
+        if (win_us >= 1000000 && s_frames > 0) {
+            const long long dl_us = g_rs64_pdl_us_total - s_pdl_base;
+            const long long dl_tasks = g_rs64_pdl_task_total - s_task_base;
+            const double fps = s_frames * 1e6 / (double)win_us;
+            fprintf(stderr,
+                "[frameprof] present=%.1f fps | period ms min/avg/max=%.1f/%.1f/%.1f | "
+                "dl us/frame=%.0f tasks/frame=%.1f | present us avg/max=%.0f/%lld | other ms/frame=%.1f\n",
+                fps,
+                s_period_min / 1000.0, (s_period_sum / (double)s_frames) / 1000.0, s_period_max / 1000.0,
+                dl_us / (double)s_frames, dl_tasks / (double)s_frames,
+                s_pres_sum / (double)s_frames, s_pres_max,
+                ((s_period_sum - dl_us - s_pres_sum) / (double)s_frames) / 1000.0);
+            fflush(stderr);
+            s_win0 = now; s_pdl_base = g_rs64_pdl_us_total; s_task_base = g_rs64_pdl_task_total;
+            s_period_min = s_period_max = s_period_sum = 0; s_frames = 0;
+            s_pres_sum = s_pres_max = 0;
+        }
     }
 
     void shutdown() override {
@@ -455,7 +537,7 @@ private:
         auto write_region = [&](const char* suffix, uint32_t phys, uint32_t size) {
             char path[512];
             snprintf(path, sizeof path, "%s.%s.bin", s_path, suffix);
-            FILE* f = fopen(path, "wb");
+            FILE* f = recomp::os::fopen(path, "wb");
             if (!f) return;
             std::vector<uint8_t> buf(size);
             for (uint32_t i = 0; i < size; ++i) buf[i] = rd8(phys + i);
@@ -557,6 +639,8 @@ private:
         app->state->writeBackRDRAM = nullptr;
         g_rs64_pdl_us = (long long)std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::high_resolution_clock::now() - pdl0).count();
+        g_rs64_pdl_us_total += g_rs64_pdl_us;
+        g_rs64_pdl_task_total += 1;
         rs64_sanitize_fb_registry();
 
         static int s_n = 0;
@@ -829,7 +913,7 @@ private:
             std::snprintf(tag, sizeof tag, "cine_iter%llu", it);
             if (s_next < s_iters.size()) {
                 char path2[512]; std::snprintf(path2, sizeof path2, "dumps/rdram_%s.bin", tag);
-                if (FILE* f2 = fopen(path2, "wb")) {
+                if (FILE* f2 = recomp::os::fopen(path2, "wb")) {
                     static uint8_t buf2[0x10000];
                     for (uint32_t base = 0; base < 0x800000u; base += sizeof buf2) {
                         for (uint32_t i = 0; i < sizeof buf2; ++i) buf2[i] = app->core.RDRAM[(base + i) ^ 3];
@@ -873,7 +957,7 @@ private:
         char path[512];
         if (const char* p = env_str("ROGUESQ_DUMP_RDRAM_PATH")) std::snprintf(path, sizeof path, "%s", p);
         else std::snprintf(path, sizeof path, "dumps/rdram_%s.bin", tag);
-        FILE* f = fopen(path, "wb");
+        FILE* f = recomp::os::fopen(path, "wb");
         if (f) {
             static uint8_t buf[0x10000];
             for (uint32_t base = 0; base < 0x800000u; base += sizeof buf) {

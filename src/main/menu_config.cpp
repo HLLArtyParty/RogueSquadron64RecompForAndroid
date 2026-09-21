@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include "os_compat.h"
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -68,7 +69,7 @@ constexpr uint8_t SUBTYPE_HOST    = 4;
 constexpr int16_t YESNO_X = -0x40;
 
 bool env_disabled(const char* name) {
-    const char* v = std::getenv(name);
+    const char* v = recomp::os::getenv(name);
     return v && *v && *v != '0';
 }
 

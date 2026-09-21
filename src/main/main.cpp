@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstdlib>
+#include "os_compat.h"
 #include <cstring>
 #include <csignal>
 #include <vector>
@@ -8,6 +9,8 @@
 #include <thread>
 #include <chrono>
 #include <atomic>
+#include <exception>
+#include <typeinfo>
 static unsigned g_rs64_audio_underruns = 0;   // dry-queue arrivals (see queue_samples)
 
 #include "ultramodern/ultra64.h"
@@ -137,7 +140,7 @@ static RspExitReason musyx_stub(uint8_t* rdram, uint32_t ucode_addr) {
     // The game inits the table to 0xFFFFFFFF later (~task#150), too late for the intro. While the
     // table is still all-zero (uninit), pre-fill the empty slots to 0xFFFFFFFF so the intro load
     // sees real empties. No-ops once any slot is populated (game took over).
-    { static int s_fix = -1; if (s_fix < 0) { const char* e = std::getenv("ROGUESQ_SONGTABLE_FIX"); s_fix = (e && e[0]=='0') ? 0 : 1; }
+    { static int s_fix = -1; if (s_fix < 0) { const char* e = recomp::os::getenv("ROGUESQ_SONGTABLE_FIX"); s_fix = (e && e[0]=='0') ? 0 : 1; }
       if (s_fix) { const uint32_t T = 0x139A00u; bool allzero = true;
         for (int i = 0; i < 16; ++i) { uint32_t a = T + i*8;
           if (rdram_be32(rdram, a) != 0) { allzero = false; break; } }
@@ -146,7 +149,7 @@ static RspExitReason musyx_stub(uint8_t* rdram, uint32_t ucode_addr) {
     // ROGUESQ_DUMP_AUDIO_UCODE=1: dump the MusyX ucode TEXT (0x1000B from
     // ucode_addr) + DATA to files for an offline RSPRecomp pass. Once only.
     static int s_dump_en = -1;
-    if (s_dump_en < 0) { const char* e = std::getenv("ROGUESQ_DUMP_AUDIO_UCODE"); s_dump_en = (e && e[0] && e[0]!='0') ? 1 : 0; }
+    if (s_dump_en < 0) { const char* e = recomp::os::getenv("ROGUESQ_DUMP_AUDIO_UCODE"); s_dump_en = (e && e[0] && e[0]!='0') ? 1 : 0; }
     // Check voice-struct population at several time points (boot → ~25s) to see
     // if the MusyX sample/voice data EVER loads into RDRAM. s_n counts M_AUDTASK
     // (~60/s). At each checkpoint: follow cmdlist voice pointers (+0x08, stride
@@ -220,7 +223,7 @@ static RspExitReason musyx_audio_runner(uint8_t* rdram, uint32_t ucode_addr) {
     // bank is loaded in RAM and at what base (= .samp_base for voice sample ptrs).
     {
         static int s_en = -1, s_found = 0, s_n = 0;
-        if (s_en < 0) { const char* e = std::getenv("ROGUESQ_LOG_AUDIO_OUT"); s_en = (e && e[0] && e[0] != '0') ? 1 : 0; }
+        if (s_en < 0) { const char* e = recomp::os::getenv("ROGUESQ_LOG_AUDIO_OUT"); s_en = (e && e[0] && e[0] != '0') ? 1 : 0; }
         if (s_en && !s_found && ((++s_n) <= 1 || (s_n % 256) == 0)) {
             static const uint8_t sig[8] = { 0xFC,0x97,0xFF,0x63,0x01,0x58,0x00,0x81 };
             int hitsS = 0, hitsR = 0; uint32_t firstS = 0, firstR = 0;
@@ -267,7 +270,7 @@ static RspExitReason musyx_audio_runner(uint8_t* rdram, uint32_t ucode_addr) {
     // Compare the LIVE synth ucode (RAM at OSTask.ucode) vs what the recomp decoded (ROM 0x9ABE0).
     // IMEM 0x3E8 (jal target of the header DMA) is nop+COP2 in ROM; if live RAM shows mtc0/DMA here
     // the recomp decoded the WRONG source (toml text_offset stale) — that's the synth-silence root.
-    if (std::getenv("ROGUESQ_LOG_UCODESRC") && s_n <= 2) {
+    if (recomp::os::getenv("ROGUESQ_LOG_UCODESRC") && s_n <= 2) {
         uint32_t uc = (uint32_t)g_audio_task.t.ucode & 0x00FFFFFFu;
         auto dump = [&](uint32_t off){ char b[80]; int o=0;
             for(int k=0;k<16;k++) o+=snprintf(b+o,sizeof(b)-o,"%s%02X",(k%4==0)?" ":"",rdram[(uc+off+k)^3]);
@@ -278,7 +281,7 @@ static RspExitReason musyx_audio_runner(uint8_t* rdram, uint32_t ucode_addr) {
     }
     // Probe the command list the synth will process — does it actually contain voice commands?
     {
-        static int s_lo = -1; if (s_lo < 0) { const char* e = std::getenv("ROGUESQ_LOG_AUDIO_OUT"); s_lo = (e && e[0] && e[0] != '0') ? 1 : 0; }
+        static int s_lo = -1; if (s_lo < 0) { const char* e = recomp::os::getenv("ROGUESQ_LOG_AUDIO_OUT"); s_lo = (e && e[0] && e[0] != '0') ? 1 : 0; }
         if (s_lo && (s_n <= 8 || (s_n % 128) == 0)) {
             uint32_t dp = (uint32_t)g_audio_task.t.data_ptr & 0x00FFFFFFu; uint32_t ds = (uint32_t)g_audio_task.t.data_size;
             char hx[260]; int o = 0;
@@ -330,11 +333,10 @@ static RspExitReason musyx_audio_runner(uint8_t* rdram, uint32_t ucode_addr) {
             fprintf(stderr, "%s\n", hx); fflush(stderr);
         }
     }
-    bool log = (s_n <= 6);
     // EXPERIMENT (ROGUESQ_BRIDGE_WORD2): the CPU pipeline writes the synth voice data to
     // data_ptr+0x100, but sets word2 (data_ptr+0x8) to the separate, unfilled -0x689C buffer.
     // Point word2 back at data_ptr so the synth reads the real voice data it wrote.
-    if (std::getenv("ROGUESQ_BRIDGE_WORD2")) {
+    if (recomp::os::getenv("ROGUESQ_BRIDGE_WORD2")) {
         uint32_t dp = (uint32_t)g_audio_task.t.data_ptr;
         uint32_t dpp = dp & 0x00FFFFFFu;
         if (dpp && dpp + 0xC <= 0x800000u)
@@ -345,23 +347,22 @@ static RspExitReason musyx_audio_runner(uint8_t* rdram, uint32_t ucode_addr) {
     // state the synth depends on (beyond just the ucode_data DMA). Reading the
     // audio OSTask from DMEM[0xFC0], it DMAs the audio ucode_data → DMEM 0. Boot
     // exits via UnhandledJumpTarget/Broke on its `jr 0x1080` handoff = expected.
-    auto t0 = std::chrono::steady_clock::now();
-    RspExitReason boot_r = factor5_boot(rdram, ucode_addr);
+    factor5_boot(rdram, ucode_addr);
     auto t1 = std::chrono::steady_clock::now();
     // ROGUESQ_DUMP_SYNTH_FRAME=<n>: capture the EXACT synth input (post-boot RDRAM + OSTask) at the
     // n-th M_AUDTASK so tools/musyx_replay can run the synth offline on a POPULATED command list.
     // Writes <PATH>.bin (plain big-endian image, file[i]=rdram[i^3]) + <PATH>.task (OSTask, 0x40 BE bytes).
     {
         static int s_tgt = -2;
-        if (s_tgt == -2) { const char* e = std::getenv("ROGUESQ_DUMP_SYNTH_FRAME"); s_tgt = e ? atoi(e) : -1; }
+        if (s_tgt == -2) { const char* e = recomp::os::getenv("ROGUESQ_DUMP_SYNTH_FRAME"); s_tgt = e ? atoi(e) : -1; }
         if (s_tgt >= 0 && s_n == s_tgt) {
-            const char* base = std::getenv("ROGUESQ_DUMP_SYNTH_PATH"); if (!base || !base[0]) base = "dumps/synth_frame";
+            const char* base = recomp::os::getenv("ROGUESQ_DUMP_SYNTH_PATH"); if (!base || !base[0]) base = "dumps/synth_frame";
             char pb[512]; snprintf(pb, sizeof(pb), "%s.bin", base);
-            FILE* f = fopen(pb, "wb");
+            FILE* f = recomp::os::fopen(pb, "wb");
             if (f) { std::vector<uint8_t> img(0x800000); for (uint32_t i = 0; i < 0x800000u; ++i) img[i] = rdram[i ^ 3];
                      fwrite(img.data(), 1, img.size(), f); fclose(f); }
             char pt[512]; snprintf(pt, sizeof(pt), "%s.task", base);
-            FILE* g = fopen(pt, "wb");
+            FILE* g = recomp::os::fopen(pt, "wb");
             if (g) { const OSTask* t = &g_audio_task; uint8_t tb[0x40]; std::memset(tb, 0, sizeof(tb));
                      auto put = [&](int off, uint32_t v){ tb[off]=v>>24; tb[off+1]=v>>16; tb[off+2]=v>>8; tb[off+3]=v; };
                      put(0x00,(uint32_t)t->t.type);        put(0x04,(uint32_t)t->t.flags);
@@ -380,7 +381,7 @@ static RspExitReason musyx_audio_runner(uint8_t* rdram, uint32_t ucode_addr) {
     // buffers live in DMEM 0x600..0xFC0). All-zero => synth bailed early (no active voice). This
     // isolates "ucode not processing voices" from "output not reaching RDRAM/AI".
     {
-        static int s_dm = -1; if (s_dm < 0) { const char* e = std::getenv("ROGUESQ_LOG_DMEM"); s_dm = (e && e[0] && e[0] != '0') ? 1 : 0; }
+        static int s_dm = -1; if (s_dm < 0) { const char* e = recomp::os::getenv("ROGUESQ_LOG_DMEM"); s_dm = (e && e[0] && e[0] != '0') ? 1 : 0; }
         if (s_dm && (s_n <= 8 || (s_n % 64) == 0)) {
             uint32_t nz = 0; int mx = 0;
             for (uint32_t i = 0x600; i < 0xFC0; ++i) { uint8_t b = dmem[i]; if (b) { ++nz; if (b > mx) mx = b; } }
@@ -394,7 +395,7 @@ static RspExitReason musyx_audio_runner(uint8_t* rdram, uint32_t ucode_addr) {
     // Scans raw bytes so it's swizzle-independent (a non-zero check is order-independent). This
     // isolates "synth produces silence" from "output buffer never reaches SDL" (queue_samples).
     {
-        static int s_lo = -1; if (s_lo < 0) { const char* e = std::getenv("ROGUESQ_LOG_AUDIO_OUT"); s_lo = (e && e[0] && e[0] != '0') ? 1 : 0; }
+        static int s_lo = -1; if (s_lo < 0) { const char* e = recomp::os::getenv("ROGUESQ_LOG_AUDIO_OUT"); s_lo = (e && e[0] && e[0] != '0') ? 1 : 0; }
         if (s_lo && (s_n <= 8 || (s_n % 128) == 0)) {
             uint32_t ob  = (uint32_t)g_audio_task.t.output_buff & 0x00FFFFFFu;
             uint32_t obs = (uint32_t)g_audio_task.t.output_buff_size;
@@ -603,7 +604,7 @@ RspUcodeFunc* get_rsp_microcode(const OSTask* task) {
             // Runs the RSPRecomp'd MusyX synth (now functional after the text_address=0x1080
             // fix). DEFAULT ON; opt out with ROGUESQ_NO_AUDIO_UCODE=1 to fall back to musyx_stub.
             static int s_au = -1;
-            if (s_au < 0) { const char* e = std::getenv("ROGUESQ_NO_AUDIO_UCODE"); s_au = (e && e[0] && e[0]!='0') ? 0 : 1; }
+            if (s_au < 0) { const char* e = recomp::os::getenv("ROGUESQ_NO_AUDIO_UCODE"); s_au = (e && e[0] && e[0]!='0') ? 0 : 1; }
             if (s_au) return &musyx_audio_runner;
         }
         return &musyx_stub;
@@ -666,7 +667,7 @@ static void queue_samples(int16_t* samples, size_t num_samples) {
         { static int warm = 0; if (++warm > 64 && SDL_GetQueuedAudioSize(audio_device) == 0) ++g_rs64_audio_underruns; }
         // Diagnostic (ROGUESQ_LOG_AUDIO_OUT=1): confirm PCM flows + silence vs content.
         static int s_lo = -1;
-        if (s_lo < 0) { const char* e = std::getenv("ROGUESQ_LOG_AUDIO_OUT"); s_lo = (e && e[0] && e[0]!='0') ? 1 : 0; }
+        if (s_lo < 0) { const char* e = recomp::os::getenv("ROGUESQ_LOG_AUDIO_OUT"); s_lo = (e && e[0] && e[0]!='0') ? 1 : 0; }
         static int s_q = 0; ++s_q;
         if (s_lo && (s_q <= 8 || (s_q & 255) == 0)) {
             size_t n = num_bytes / 2; int16_t mx = 0;
@@ -711,11 +712,11 @@ static void queue_samples(int16_t* samples, size_t num_samples) {
         // Header sizes are patched each buffer so the file stays valid if the run is killed.
         static FILE* s_wav = nullptr; static int s_wav_init = -1; static uint32_t s_wav_bytes = 0;
         if (s_wav_init < 0) {
-            const char* e = std::getenv("ROGUESQ_DUMP_PCM");
+            const char* e = recomp::os::getenv("ROGUESQ_DUMP_PCM");
             s_wav_init = (e && e[0] && e[0] != '0') ? 1 : 0;
             if (s_wav_init) {
                 const char* path = (e[0] == '1' && e[1] == '\0') ? "dumps/wav/capture.wav" : e;
-                s_wav = fopen(path, "wb");
+                s_wav = recomp::os::fopen(path, "wb");
                 fprintf(stderr, "[pcm-dump] init path=%s fopen=%p\n", path, (void*)s_wav); fflush(stderr);
                 if (s_wav) {
                     uint16_t ch = 2, bps = 16; uint32_t sr = audio_sample_rate;
@@ -742,7 +743,7 @@ static void queue_samples(int16_t* samples, size_t num_samples) {
         // during busy cinematic SFX. Scale down before SDL so it doesn't blast/distort.
         // Tunable via ROGUESQ_AUDIO_GAIN (0.0-1.0); default 0.5. Applied after the raw WAV dump.
         { static float g = -1.0f;
-          if (g < 0.0f) { const char* e = std::getenv("ROGUESQ_AUDIO_GAIN"); g = (e && e[0]) ? (float)atof(e) : 0.35f; if (g < 0.0f || g > 1.0f) g = 0.35f; }
+          if (g < 0.0f) { const char* e = recomp::os::getenv("ROGUESQ_AUDIO_GAIN"); g = (e && e[0]) ? (float)atof(e) : 0.35f; if (g < 0.0f || g > 1.0f) g = 0.35f; }
           if (g < 0.999f) { size_t n = num_bytes / 2; for (size_t i = 0; i < n; ++i) samples[i] = (int16_t)((float)samples[i] * g); } }
         SDL_QueueAudio(audio_device, samples, (Uint32)num_bytes);
     }
@@ -760,7 +761,7 @@ static size_t get_frames_remaining() {
     // the Godot value 0.5). Tunable via ROGUESQ_AUDIO_LATENCY_MS (default 60; 0 = off). 100 was
     // audibly late against the picture (2026-09-08); the synth now runs on the retrace thread each VI.
     static int ms = -1;
-    if (ms < 0) { const char* e = std::getenv("ROGUESQ_AUDIO_LATENCY_MS"); ms = (e && e[0]) ? atoi(e) : 60; if (ms < 0) ms = 0; }
+    if (ms < 0) { const char* e = recomp::os::getenv("ROGUESQ_AUDIO_LATENCY_MS"); ms = (e && e[0]) ? atoi(e) : 60; if (ms < 0) ms = 0; }
     size_t cushion = (size_t)audio_sample_rate * (unsigned)ms / 1000u;
     return frames > cushion ? frames - cushion : 0;
 }
@@ -789,7 +790,7 @@ extern "C" volatile uint8_t* volatile g_recomp_rdram_for_wp_raw = nullptr;
 // The 4 callback slots at D_8011A8A4 are the per-frame draw callbacks the
 // main game thread iterates each frame.
 static void start_state_poller() {
-    if (!std::getenv("ROGUESQ_LOG_STATE")) return;
+    if (!recomp::os::getenv("ROGUESQ_LOG_STATE")) return;
     static std::thread t{[]{
         uint8_t* rdram = nullptr;
         while (!(rdram = (uint8_t*)g_recomp_rdram_for_wp_raw)) {
@@ -848,7 +849,7 @@ static void start_state_poller() {
                     // and the game's pool walker should exit early on -1 sentinel.
                     // Our zero-init heap puts 0 instead. Test the hypothesis:
                     // ROGUESQ_FORCE_EMPTY_POOL_SENTINEL=1.
-                    if (std::getenv("ROGUESQ_FORCE_EMPTY_POOL_SENTINEL")) {
+                    if (recomp::os::getenv("ROGUESQ_FORCE_EMPTY_POOL_SENTINEL")) {
                         bool all_zero = true;
                         for (int j = 0; j < 16; ++j) {
                             if (rdram[(off + j) ^ 3] != 0) { all_zero = false; break; }
@@ -930,7 +931,7 @@ static void start_state_poller() {
 //                (each slot is 8B, jalr handler at slot+0x00)
 //   active_slot_indices : 6 halfwords at 0x80139560
 static void start_phase_poller() {
-    if (!std::getenv("ROGUESQ_LOG_PHASE")) return;
+    if (!recomp::os::getenv("ROGUESQ_LOG_PHASE")) return;
     static std::thread t{[]{
         uint8_t* rdram = nullptr;
         while (!(rdram = (uint8_t*)g_recomp_rdram_for_wp_raw)) {
@@ -1088,7 +1089,7 @@ static SDL_GameController* controller = nullptr;
 // through prompts (0/unset = never). Self-test aid only; default OFF.
 static bool fake_controller_enabled() {
     static bool s = []() {
-        const char* v = std::getenv("ROGUESQ_FAKE_CONTROLLER");
+        const char* v = recomp::os::getenv("ROGUESQ_FAKE_CONTROLLER");
         return v && v[0] && v[0] != '0';
     }();
     return s;
@@ -1160,7 +1161,11 @@ static void poll_input() {
         if (e.type == SDL_QUIT) {
             fprintf(stderr, "[main] SDL_QUIT received, exiting\n");
             fflush(stderr);
-            exit(EXIT_SUCCESS);
+            // _Exit, not exit: the recomp game threads and RT64 are still live, so
+            // running the C++/atexit static-destructor table here throws (-> terminate,
+            // the Release crash-on-close) or deadlocks (the hang). Terminate now; the OS
+            // reclaims SDL/GPU/process resources. Matches the crash handlers' _Exit.
+            _Exit(EXIT_SUCCESS);
         }
         if (e.type == SDL_CONTROLLERDEVICEADDED) {
             if (!controller) {
@@ -1209,7 +1214,7 @@ static void poll_input() {
     // so each bar can be labelled. Addresses are the absolute lw sources in
     // drawFrameProfilerBars; words are stored host-order in the raw RDRAM buf.
     static int s_prof_dump = -1;
-    if (s_prof_dump < 0) { const char* e2 = getenv("ROGUESQ_PROFILER_DUMP"); s_prof_dump = (e2 && *e2 != '0') ? 1 : 0; }
+    if (s_prof_dump < 0) { const char* e2 = recomp::os::getenv("ROGUESQ_PROFILER_DUMP"); s_prof_dump = (e2 && *e2 != '0') ? 1 : 0; }
     if (s_prof_dump) {
         if (const uint8_t* rd = (const uint8_t*)g_recomp_rdram_for_wp_raw) {
             auto W = [rd](uint32_t va) { return *reinterpret_cast<const uint32_t*>(rd + (va & 0x7FFFFF)); };
@@ -1268,7 +1273,7 @@ static bool get_n64_input(int controller_num, uint16_t* buttons, float* x, float
         // runs still clear the "NO CONTROLLER" gate.
         if (fake_controller_enabled()) {
             static int s_auto = -1;
-            if (s_auto < 0) { const char* v = std::getenv("ROGUESQ_AUTO_START"); s_auto = (v && v[0]) ? atoi(v) : 0; }
+            if (s_auto < 0) { const char* v = recomp::os::getenv("ROGUESQ_AUTO_START"); s_auto = (v && v[0]) ? atoi(v) : 0; }
             uint16_t fb = 0;
             if (s_auto > 0 && (SDL_GetTicks() % (uint32_t)s_auto) < 120u) fb |= N64_START_BUTTON;
             fb |= boot_start_pulse();
@@ -1280,7 +1285,7 @@ static bool get_n64_input(int controller_num, uint16_t* buttons, float* x, float
     }
 
     static int s_auto = -1;
-    if (s_auto < 0) { const char* v = std::getenv("ROGUESQ_AUTO_START"); s_auto = (v && v[0]) ? atoi(v) : 0; }
+    if (s_auto < 0) { const char* v = recomp::os::getenv("ROGUESQ_AUTO_START"); s_auto = (v && v[0]) ? atoi(v) : 0; }
     if (s_auto > 0 && (SDL_GetTicks() % (uint32_t)s_auto) < 120u) btn |= N64_START_BUTTON;
     btn |= boot_start_pulse();
     *buttons = btn;
@@ -1583,7 +1588,7 @@ static void rs64_vi_callback() {
     --g_vi_tick;
     static int s_on = -1;
     if (s_on < 0) {
-        const char* e = std::getenv("ROGUESQ_VI_BARRIER_SIGNAL");
+        const char* e = recomp::os::getenv("ROGUESQ_VI_BARRIER_SIGNAL");
         s_on = (e && e[0] == '0') ? 0 : 1;
     }
     // Tick for rs64_attrib_wait_vi (attribution loop paces to the real VI).
@@ -1599,7 +1604,7 @@ static void rs64_vi_callback() {
     // bufferArbiterProducerScanWait drain-barrier hangs (boot "freeze" at iter ~903). Posting the
     // registered message (0x8011A4CC) every VI wakes it to drain buffers. ROGUESQ_VI_RETRACE_SIGNAL=0 to disable.
     static int s_vr = -1;
-    if (s_vr < 0) { const char* e = std::getenv("ROGUESQ_VI_RETRACE_SIGNAL"); s_vr = (e && e[0] == '0') ? 0 : 1; }
+    if (s_vr < 0) { const char* e = recomp::os::getenv("ROGUESQ_VI_RETRACE_SIGNAL"); s_vr = (e && e[0] == '0') ? 0 : 1; }
     if (s_vr) {
         ultramodern::enqueue_external_message((PTR(OSMesgQueue))0x80114388u, (OSMesg)0x8011A4CCu, false, false);
     }
@@ -1610,7 +1615,7 @@ static void rs64_vi_callback() {
     // iter ~891). Posting a token each VI gives it a 60Hz frame-sync pulse so it proceeds (the
     // recv discards the message value). ROGUESQ_VI_FRAMESYNC_SIGNAL=0 to disable.
     static int s_fs = -1;
-    if (s_fs < 0) { const char* e = std::getenv("ROGUESQ_VI_FRAMESYNC_SIGNAL"); s_fs = (e && e[0] == '0') ? 0 : 1; }
+    if (s_fs < 0) { const char* e = recomp::os::getenv("ROGUESQ_VI_FRAMESYNC_SIGNAL"); s_fs = (e && e[0] == '0') ? 0 : 1; }
     if (s_fs) {
         ultramodern::enqueue_external_message((PTR(OSMesgQueue))0x80128D10u, (OSMesg)0, false, false);
     }
@@ -1625,7 +1630,7 @@ static void rs64_vi_callback() {
     // The op_b5 DL-walk bound (rt64_gbi_f3dfactor5.cpp) is what stabilized the cinematic; this
     // signal is opt-in for further frame-pacing experiments. ROGUESQ_VI_VIDEOQ_SIGNAL=1 to enable.
     static int s_vq = -1;
-    if (s_vq < 0) { const char* e = std::getenv("ROGUESQ_VI_VIDEOQ_SIGNAL"); s_vq = (e && e[0] && e[0] != '0') ? 1 : 0; }
+    if (s_vq < 0) { const char* e = recomp::os::getenv("ROGUESQ_VI_VIDEOQ_SIGNAL"); s_vq = (e && e[0] && e[0] != '0') ? 1 : 0; }
     if (s_vq) {
         ultramodern::enqueue_external_message((PTR(OSMesgQueue))0x80128CF0u, (OSMesg)0, false, false);
     }
@@ -1743,7 +1748,7 @@ static void write_minidump_safe(EXCEPTION_POINTERS* ep) {
     // dump only needs threads + stacks + indirectly-referenced memory.
     // Set ROGUESQ_FULL_DUMP=1 to restore the full 5 GB dump for deep-dives.
     static const bool s_full_dump = []{
-        const char *e = std::getenv("ROGUESQ_FULL_DUMP");
+        const char *e = recomp::os::getenv("ROGUESQ_FULL_DUMP");
         return e && *e && *e != '0';
     }();
     MINIDUMP_TYPE dumpType = s_full_dump
@@ -1917,7 +1922,7 @@ int main(int argc, char* argv[]) {
     // overwrites it with defaults.
     {
         std::string cfg = rs64::input::default_config_path();
-        const char* reset = std::getenv("ROGUESQ_INPUT_RESET");
+        const char* reset = recomp::os::getenv("ROGUESQ_INPUT_RESET");
         bool force = reset && reset[0] && reset[0] != '0';
         if (force || !rs64::input::load_bindings(g_bindings, cfg)) {
             g_bindings = rs64::input::default_bindings();
@@ -1951,7 +1956,7 @@ int main(int argc, char* argv[]) {
     // GlobalLogFile only exists in RT64 debug builds (under !NDEBUG); in Release
     // the RT64_LOG_* macros are no-ops, so the redirect is both unneeded and uncompilable.
 #ifndef NDEBUG
-    if (FILE *nul = fopen("NUL", "w")) {
+    if (FILE *nul = recomp::os::fopen("NUL", "w")) {
         RT64::GlobalLogFile = nul;
     } else {
         RT64::GlobalLogFile = stderr;  // last-resort fallback
@@ -1963,6 +1968,51 @@ int main(int argc, char* argv[]) {
 
 #ifdef _WIN32
     SetUnhandledExceptionFilter(crash_handler);
+    // Pinpoints uncaught C++ throws (notably ultramodern::thread_terminated, which
+    // must be caught in _thread_func/entrypoint but escapes on any thread lacking
+    // that catch). Runs on the throwing thread before abort, stack not yet unwound,
+    // so the symbolized trace names the escape site. Falls through to the dump + exit.
+    std::set_terminate([]{
+        // Write to a file too: the Release build is /SUBSYSTEM:WINDOWS, so stderr
+        // is not attached to a console and a shell redirect captures nothing.
+        CreateDirectoryA("dumps", NULL);
+        CreateDirectoryA("dumps/crash-dumps", NULL);
+        char path[MAX_PATH]; SYSTEMTIME st; GetLocalTime(&st);
+        snprintf(path, sizeof(path), "dumps/crash-dumps/terminate_%04u%02u%02u_%02u%02u%02u.txt",
+            st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+        FILE* tf = fopen(path, "w");
+        uintptr_t modbase = (uintptr_t)GetModuleHandleW(NULL);
+        char line[512];
+        snprintf(line, sizeof(line),
+            "[TERMINATE] tid=%lu is_game_thread=%d thread_self=0x%08X modbase=0x%p\n",
+            GetCurrentThreadId(), (int)ultramodern::is_game_thread(),
+            (uint32_t)ultramodern::this_thread(), (void*)modbase);
+        fputs(line, stderr); if (tf) fputs(line, tf);
+        const char* extype = "no in-flight exception";
+        char exbuf[256] = {0};
+        if (std::exception_ptr ep = std::current_exception()) {
+            try { std::rethrow_exception(ep); }
+            catch (const std::exception& e) {
+                snprintf(exbuf, sizeof(exbuf), "uncaught %s: %s", typeid(e).name(), e.what());
+                extype = exbuf;
+            }
+            catch (...) { extype = "uncaught non-std exception"; }
+        }
+        snprintf(line, sizeof(line), "[TERMINATE] %s\n", extype);
+        fputs(line, stderr); if (tf) fputs(line, tf);
+        void* frames[62];
+        USHORT count = RtlCaptureStackBackTrace(0, 62, frames, nullptr);
+        fputs("[TERMINATE] stack RVAs:", stderr); if (tf) fputs("[TERMINATE] stack RVAs:", tf);
+        for (USHORT i = 0; i < count; i++) {
+            snprintf(line, sizeof(line), " 0x%llX",
+                (unsigned long long)((uintptr_t)frames[i] - modbase));
+            fputs(line, stderr); if (tf) fputs(line, tf);
+        }
+        fputs("\n", stderr); if (tf) { fputs("\n", tf); fflush(tf); fclose(tf); }
+        print_stack_with_symbols(frames, count);  // symbolized to stderr when a PDB exists
+        write_minidump_safe(nullptr);
+        _Exit(3);
+    });
     signal(SIGABRT, [](int){
         fprintf(stderr, "[ABORT] caught SIGABRT, dumping stack:\n");
         void* frames[32];

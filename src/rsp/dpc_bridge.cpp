@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include "os_compat.h"
 #include <mutex>
 #include <unordered_map>
 #include "librecomp/rsp.hpp"
@@ -107,7 +108,7 @@ inline uint32_t be_w(uint8_t* rdram, int64_t mips, int off) {
 // flames don't go white. Writes the forwarded RDRAM bytes in place.
 void dpc_apply_prim_override(uint8_t* rdram, uint32_t submit_lo) {
     static const bool prim_full = []{
-        const char *e = std::getenv("ROGUESQ_PRIM_FF");
+        const char *e = recomp::os::getenv("ROGUESQ_PRIM_FF");
         return e && *e && *e != '0';
     }();
     if (!prim_full) return;
@@ -148,11 +149,11 @@ void dpc_track_fb_ownership(uint8_t* rdram, uint32_t submit_lo) {
 // HIGH + LOW gated by ROGUESQ_SUPPRESS_OOB_CIMG; MID gated by ROGUESQ_DROP_MID_CIMG.
 bool dpc_suppress_oob_cimg(uint8_t* rdram, uint32_t submit_lo, uint32_t submit_hi) {
     static const bool s_suppress = []{
-        const char* v = std::getenv("ROGUESQ_SUPPRESS_OOB_CIMG");
+        const char* v = recomp::os::getenv("ROGUESQ_SUPPRESS_OOB_CIMG");
         return v && *v && *v != '0';
     }();
     static const bool s_drop_mid = []{
-        const char* v = std::getenv("ROGUESQ_DROP_MID_CIMG");
+        const char* v = recomp::os::getenv("ROGUESQ_DROP_MID_CIMG");
         return v && *v && *v != '0';
     }();
     if ((submit_hi - submit_lo) != 8) return false;
@@ -255,7 +256,7 @@ extern "C" void rsp_task_log_and_reset(uint32_t iters, uint32_t data_size, uint3
 // path, ~5 fps cinematic) for A/B comparison.
 extern "C" void rsp_force_fullsync() {
     static const bool disabled = []{
-        const char *e = std::getenv("ROGUESQ_NO_SYNTH_FULLSYNC");
+        const char *e = recomp::os::getenv("ROGUESQ_NO_SYNTH_FULLSYNC");
         bool d = (e != nullptr && *e != '\0' && *e != '0');
         if (d) { fprintf(stderr, "[dpc] synthetic FULL_SYNC injection DISABLED via env\n"); fflush(stderr); }
         return d;

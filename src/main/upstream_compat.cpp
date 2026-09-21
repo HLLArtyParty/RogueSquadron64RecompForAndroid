@@ -92,9 +92,9 @@ extern "C" void osDpGetCounters_recomp(uint8_t* rdram, recomp_context* ctx) {
     // genuine RT64 workload proxies (counts since last frame). buf[1/2/3] are the
     // struct's +0x14/+0x18/+0x1C fields submitGfxFrame scales into the HUD.
     static int ts = -1, ds = -1, xs = -1;
-    if (ts < 0) { const char* s = getenv("ROGUESQ_TRIS_SCALE"); ts = (s && *s) ? atoi(s) : 64; }
-    if (ds < 0) { const char* s = getenv("ROGUESQ_DRAW_SCALE"); ds = (s && *s) ? atoi(s) : 256; }
-    if (xs < 0) { const char* s = getenv("ROGUESQ_TEX_SCALE");  xs = (s && *s) ? atoi(s) : 256; }
+    if (ts < 0) { const char* s = recomp::os::getenv("ROGUESQ_TRIS_SCALE"); ts = (s && *s) ? atoi(s) : 64; }
+    if (ds < 0) { const char* s = recomp::os::getenv("ROGUESQ_DRAW_SCALE"); ds = (s && *s) ? atoi(s) : 256; }
+    if (xs < 0) { const char* s = recomp::os::getenv("ROGUESQ_TEX_SCALE");  xs = (s && *s) ? atoi(s) : 256; }
     uint32_t tris     = g_rs64_frame_tris.exchange(0, std::memory_order_relaxed);
     uint32_t draws    = g_rs64_frame_draws.exchange(0, std::memory_order_relaxed);
     uint32_t texloads = g_rs64_frame_texloads.exchange(0, std::memory_order_relaxed);
@@ -238,12 +238,12 @@ static void rs64_mesg_trace(uint8_t* rdram, const char* ev, uint32_t q, int flag
     static const bool on = env_on("ROGUESQ_LOG_MESG_TRACE");
     if (!on) return;
     static uint32_t lo = 60, hi = 70;
-    static const bool win = [](){ if (const char* e = env_str("ROGUESQ_MESG_TRACE_FRAMES")) { unsigned a, b; if (sscanf(e, "%u-%u", &a, &b) == 2) { lo = a; hi = b; } } return true; }();
+    static const bool win = [](){ if (const char* e = env_str("ROGUESQ_MESG_TRACE_FRAMES")) { char* end = nullptr; unsigned long a = std::strtoul(e, &end, 10); if (end && *end == '-') { unsigned long b = std::strtoul(end + 1, nullptr, 10); lo = (uint32_t)a; hi = (uint32_t)b; } } return true; }();
     (void)win;
     uint32_t frame = *reinterpret_cast<const uint32_t*>(rdram + 0x13889C);
     if (frame < lo || frame > hi) return;
     static std::mutex m; std::lock_guard<std::mutex> lk(m);
-    static FILE* f = fopen("../../logs/mesg_trace_recomp.csv", "w");   // cwd is build/Debug
+    static FILE* f = recomp::os::fopen("../../logs/mesg_trace_recomp.csv", "w");   // cwd is build/Debug
     if (!f) return;
     void* frames[4]; USHORT n = RtlCaptureStackBackTrace(2, 4, frames, nullptr);
     const char* caller = n ? rs64_host_caller_name(frames[0]) : "?";
@@ -335,14 +335,14 @@ extern "C" void osDestroyThread_recomp(uint8_t* rdram, recomp_context* ctx) {
 // Also called from hooks in rogue_squadron.toml.
 extern "C" volatile unsigned g_rs64_pw_calls = 0, g_rs64_pw_waited = 0, g_rs64_pw_ms = 0, g_rs64_pw_timeouts = 0;
 extern "C" void rs64_wait_gfx_parse_yield(uint8_t* rdram, recomp_context* ctx) {
-    ++g_rs64_pw_calls;
+    g_rs64_pw_calls = g_rs64_pw_calls + 1;
     const auto t0 = std::chrono::steady_clock::now();
     auto ms_since = [&]() { return (unsigned)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count(); };
     for (int i = 0; i < 500; ++i) {
-        if (!rs64_gfx_parse_inflight_wait(1)) { if (i) { ++g_rs64_pw_waited; g_rs64_pw_ms += ms_since(); } return; }
+        if (!rs64_gfx_parse_inflight_wait(1)) { if (i) { g_rs64_pw_waited = g_rs64_pw_waited + 1; g_rs64_pw_ms = g_rs64_pw_ms + ms_since(); } return; }
         osYieldThread_recomp(rdram, ctx);
     }
-    ++g_rs64_pw_timeouts; g_rs64_pw_ms += ms_since();
+    g_rs64_pw_timeouts = g_rs64_pw_timeouts + 1; g_rs64_pw_ms = g_rs64_pw_ms + ms_since();
 }
 
 extern "C" void osRecvMesg_recomp(uint8_t* rdram, recomp_context* ctx) {
@@ -419,7 +419,7 @@ static void rs64_check_chunk_freelist(uint8_t* rdram) {
     s_dumped = true;
     fprintf(stderr, "[chunklist] CORRUPT at task start: %s: prev=0x%08X bad=0x%08X steps=%d\n", why, prev, node, steps);
     const char* path = env_str("ROGUESQ_DUMP_RDRAM_PATH");
-    FILE* f = fopen(path ? path : "chunklist_corrupt.bin", "wb");
+    FILE* f = recomp::os::fopen(path ? path : "chunklist_corrupt.bin", "wb");
     if (f) {
         static uint8_t buf[0x10000];
         for (uint32_t base = 0; base < 0x800000u; base += sizeof buf) {
