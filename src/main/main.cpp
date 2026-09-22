@@ -37,7 +37,13 @@ static unsigned g_rs64_audio_underruns = 0;   // dry-queue arrivals (see queue_s
 #include "SDL_syswm.h"
 #else
 #include "SDL2/SDL.h"
-#include "SDL2/SDL_syswm.h"
+// SDL_syswm.h is only needed for the Win32 HWND path in create_window(); on
+// Linux it pulls X11 <Xlib.h>, whose None/Bool/Status macros collide with C++
+// enum members (e.g. ultramodern::input::Pak::None), so it is not included here.
+static inline uint64_t GetTickCount64() {
+    return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 #endif
 
 // N64 button bitmasks (from libultra PR/controller.h)
@@ -766,12 +772,17 @@ static size_t get_frames_remaining() {
     return frames > cushion ? frames - cushion : 0;
 }
 
+#ifdef _WIN32
 // Forward declaration so the F12 hotkey in poll_input() can write a dump.
 static void write_minidump_safe(EXCEPTION_POINTERS* ep);
 // Forward declaration so the crash handler can render the offending thread
 // stack with symbols. Non-static so the RT64 d3d12 allocator-failure tracer
 // can extern-declare and call it.
 void print_stack_with_symbols(void** frames, USHORT count);
+#else
+// No DbgHelp/minidump support off-Windows; the F12 hotkey path is a no-op.
+static void write_minidump_safe(void*) {}
+#endif
 
 // (Periodic mqdiag watchdog removed — mqdiag_dump lived in the librecomp
 //  fork and isn't in upstream. Hangs are rare enough now that on-demand
@@ -1509,11 +1520,18 @@ namespace recomp {
 }
 
 ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::gfx_data_t) {
+    // On non-Windows RT64 renders through Vulkan and needs the window created
+    // with SDL_WINDOW_VULKAN so SDL_Vulkan_CreateSurface can bind to it. On
+    // Windows the backend is D3D12 via the HWND, so the flag is omitted.
+    Uint32 window_flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN;
+#ifndef _WIN32
+    window_flags |= SDL_WINDOW_VULKAN;
+#endif
     SDL_Window* sdl_window = SDL_CreateWindow(
         "Star Wars: Rogue Squadron 64 Recompiled",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         640, 480,
-        SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN
+        window_flags
     );
     if (!sdl_window) {
         fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -1674,6 +1692,7 @@ std::vector<recomp::GameEntry> supported_games = {
 // main()
 // ---------------------------------------------------------------------------
 // One-shot init of DbgHelp symbol resolution — done lazily on first crash.
+#ifdef _WIN32
 static void ensure_dbghelp_init() {
     static bool init = false;
     if (init) return;
@@ -1790,6 +1809,7 @@ static LONG WINAPI crash_handler(EXCEPTION_POINTERS* ep) {
     fflush(stderr);
     return EXCEPTION_CONTINUE_SEARCH;
 }
+#endif // _WIN32
 
 // Set an env var so the getenv-based knobs below pick it up. The whole program
 // is configured through the environment, not argv, so CLI args are translated here.

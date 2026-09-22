@@ -97,6 +97,27 @@ The binary is `build/Debug/RogueSquadron64Recomp.exe` (Windows) or `build/RogueS
 | `-DROGUESQ_DX12_DEBUG=ON` | OFF | D3D12 debug layer (Debug builds only) |
 | `-DROGUESQ_NO_ITER_DEBUG=ON` | OFF | Disable MSVC debug iterators in `lib/rt64` for faster Debug runs |
 
+### Linux / WSL notes
+
+Builds and can run on **Ubuntu 24.04 under WSL2** (GCC 13 / Ninja); native Linux should behave the same with a real Vulkan driver. Non-Windows targets render through **Vulkan**. (D3D12 is Windows-only)
+
+Install the dependencies, then configure with Ninja and build the game target:
+
+```sh
+sudo apt install build-essential cmake ninja-build libsdl2-dev libvulkan-dev libgtk-3-dev python3
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --target RogueSquadron64Recomp
+```
+
+The `patches/` override layer is skipped automatically without `mips64-elf-gcc` (Linux clang/gcc ships the MIPS backend, so it *can* be built — see [patches/README.md](patches/README.md)); without it the game links and runs, minus the `npc_health_guard` explosion fix.
+
+**About WSL2:**
+
+- Keep the build directory on the Linux filesystem (e.g. `~/rs64-build`), **not** under `/mnt/…` — CMake's compiler checks can fail with `Operation not permitted` on the Windows drive mount. Source can stay on `/mnt`.
+- WSLg supplies the display, PulseAudio (sound), and keyboard/mouse, so the game runs directly — no extra setup. A physical gamepad needs `usbipd-win`; the keyboard works out of the box.
+- WSL's default Vulkan is **llvmpipe (software)** — it runs but hitches. For GPU acceleration, build [Mesa's](https://gitlab.freedesktop.org/mesa/mesa) **[Dozen (`dzn`)](https://gitlab.freedesktop.org/mesa/mesa/-/tree/main/src/microsoft/vulkan?ref_type=heads)** driver (Vulkan → D3D12 → the real GPU via `/dev/dxg`). If the game doesn't detect `dzn` it'll default to software (CPU) rendering.
+- The `tools/run-wsl-gpu.sh` helper and the `Configure` / `Build` / `Run (Linux/WSL, GPU via dzn)` VS Code tasks wrap this. (`dzn` has no ray-tracing extensions — irrelevant to the current raster path.)
+
 ---
 
 ## The recompiler config (`rogue_squadron.toml`)
@@ -164,7 +185,7 @@ which you can also hand-edit.
 
 ## Status (PLAYABLE)
 
-> I have personally managed to play it all the way through from the first level to the credits sequence.
+> I have personally managed to play it (on windows) all the way through from the first level to the credits sequence.
 
 Issues:
 
@@ -178,8 +199,6 @@ Issues:
 - Frame interpolation *can be enabled* **BUT** it causes visual glitches due to how objects are ID'd. (The biggest pain point on this is the terrain which generates/changes on the fly causing the whole terrain to visually stutter) The performance hitches also causes frame stutter when interpolation is enabled.
 
 - Low Resolution mode works but affects how cutscenes are displayed with them appearing more wide than they probably should be.
-
-- **THIS HAS NOT BEEN BUILT/TESTED ON MACOS OR LINUX. Your mileage may vary.**
 
 ---
 
