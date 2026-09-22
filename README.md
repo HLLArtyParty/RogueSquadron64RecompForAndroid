@@ -289,13 +289,13 @@ A save editor also exists in *`tools/save-editor`* as an HTML page. Allowing a u
 
 ---
 
-### 'Proper' AI Agent Usage
+## 'Proper' AI Agent Usage
 
 Using an AI Agent properly comes down to handing it the *right set of tools*, *the right resources/knowledge to perform the work* and *instructions*. **AGENTS.MD** provides the baseline instructions for your agent to make changes to this project. In addition to that, **skill** files *(just like AGENTS.MD)* are use to provide instructions for things like tools, specific task and/or processes. **MCP** servers/tools can further augment existing application by giving handles/methods for agents to *better* perform tasks.
 
 This repo already provides **AGENTS.MD** and **skill** files. **MCP** servers are configured and setup by the user themselves and is something we can't force/mandate. Beyond MCP are things called **harnesses** which can be a tool to perform tasks or orchestrate agents to perform a set of tasks at once. This repo contains some harness in `tools` to performs test, perform multiple runs to verify robustness or drive an agent to particular menu to chase a bug.
 
-Once you're agent is setup tasks that would've taken weeks/months/years to do can be done in a single day/week.
+Once your agent is setup tasks that would've taken weeks/months/years to do can be done in a single day/week.
 
 Here's a list of MCPs that could useful for this project:
 
@@ -307,15 +307,13 @@ Here's a list of MCPs that could useful for this project:
 
 ---
 
-### Tooling
+## Tooling
 
 [RenderDoc](https://renderdoc.org/) to debug graphics/rendering issues.
 
 [rizin](https://rizin.re/) to assist in validating/checking the game's assembly.
 
 [pj64](https://www.pj64-emu.com/nightly-builds) to pull memory dumps for checks and comparisons. (Development builds are recommended since they provide more ways to debug/validate *even though it performs slower*)
-
----
 
 ## Acknowledgements
 
