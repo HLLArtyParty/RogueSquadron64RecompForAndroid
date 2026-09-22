@@ -76,9 +76,17 @@ if (MSVC)
     target_compile_options(RecompiledFuncs PRIVATE
         -Wno-implicit-function-declaration
         -Wno-error=implicit-function-declaration
-        # clang-cl: the recompiler emits scratch locals (hi/lo/result/c1cs) that
-        # many generated functions never use. /wd4101 only covers MSVC C4101.
-        -Wno-unused-variable)
+        # clang-cl: the recompiler emits scratch locals (hi/lo/result/c1cs) and
+        # goto labels that many generated functions never use. /wd4101 only
+        # covers MSVC C4101; clang needs -Wno-unused-variable for unread locals,
+        # -Wno-unused-but-set-variable for ones only assigned (hi/lo/result), and
+        # -Wno-unused-label for the L_ labels emitted per basic block.
+        -Wno-unused-variable
+        -Wno-unused-but-set-variable
+        -Wno-unused-label)
+    # Generated probes call getenv/atoi. Opt out of the secure-CRT deprecation
+    # specifically (keeps -Wdeprecated-declarations live for real deprecations).
+    target_compile_definitions(RecompiledFuncs PRIVATE _CRT_SECURE_NO_WARNINGS)
     # Force-include our MEM_WU macro header (fills the unsigned-word gap in
     # upstream recomp.h without modifying it). See include/rsp_dpc_macros.h.
     target_compile_options(RecompiledFuncs PRIVATE
@@ -181,7 +189,14 @@ if (EXISTS "${MIPS_GCC}" AND EXISTS "${N64RECOMP_EXE}" AND PATCHES_MAKE_EXE)
     if (MSVC)
         target_compile_options(PatchesLib PRIVATE /wd4101 /wd4133
             -Wno-implicit-function-declaration
-            -Wno-error=implicit-function-declaration)
+            -Wno-error=implicit-function-declaration
+            # clang-cl: same generated-code noise as RecompiledFuncs. /wd4101 is
+            # MSVC-only; clang needs these three for the scratch locals, the
+            # set-but-unused hi/lo/result, and the per-block L_ labels.
+            -Wno-unused-variable
+            -Wno-unused-but-set-variable
+            -Wno-unused-label)
+        target_compile_definitions(PatchesLib PRIVATE _CRT_SECURE_NO_WARNINGS)
     else()
         target_compile_options(PatchesLib PRIVATE
             -fno-strict-aliasing -Wno-unused-variable -Wno-implicit-function-declaration)
@@ -231,10 +246,6 @@ endif()
 #     Triangles get emitted as raw RDP bytes via DPC_END writes; src/rsp/
 #     dpc_bridge.cpp forwards them into RT64 via submit_rdp_range.
 #
-# A pure HLE replacement for the LLE side is feasible (op_01..op_04 plus
-# triangle assembly are tractable handlers, contrary to factor5-gbi.md's
-# original "GBI-level plan is closed" conclusion) but is multi-day work.
-# Keeping LLE for now lets us ship visuals while migrating ops one at a time.
 set(FACTOR5_UCODE_C ${CMAKE_SOURCE_DIR}/build/factor5_ucode/factor5_ucode_recompiled.c)
 set(FACTOR5_BOOT_C  ${CMAKE_SOURCE_DIR}/build/factor5_ucode/factor5_boot_recompiled.c)
 # MusyX audio synthesis ucode (RSPRecomp'd from ROM 0x9ABE0 via musyx_rsp.toml).
@@ -281,9 +292,26 @@ set_source_files_properties(${FACTOR5_UCODE_C} ${FACTOR5_BOOT_C} ${MUSYX_AUDIO_C
     LANGUAGE CXX
     COMPILE_OPTIONS "-msse4.1;${RSP_UCODE_FORCE_INCLUDE}")
 
+# Generate the game-state table header from the canonical descriptor (state_model.toml).
+set(STATE_TABLE_INL ${CMAKE_SOURCE_DIR}/src/main/state_table.inl)
+if (Python3_Interpreter_FOUND)
+    add_custom_command(
+        OUTPUT ${STATE_TABLE_INL}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/state/gen_state_table.py
+                ${CMAKE_SOURCE_DIR}/state_model.toml ${STATE_TABLE_INL}
+        DEPENDS ${CMAKE_SOURCE_DIR}/state_model.toml
+                ${CMAKE_SOURCE_DIR}/tools/state/gen_state_table.py
+                ${CMAKE_SOURCE_DIR}/tools/state/state_model.py
+        COMMENT "Generating state_table.inl from state_model.toml")
+    add_custom_target(gen_state_table DEPENDS ${STATE_TABLE_INL})
+endif()
+
 add_executable(RogueSquadron64Recomp
     ${CMAKE_SOURCE_DIR}/src/main/main.cpp
+    ${CMAKE_SOURCE_DIR}/src/main/game_state.cpp
+    ${CMAKE_SOURCE_DIR}/src/main/nav_sequencer.cpp
     ${CMAKE_SOURCE_DIR}/src/main/input_bindings.cpp
+    ${CMAKE_SOURCE_DIR}/src/main/video_config.cpp
     ${CMAKE_SOURCE_DIR}/src/main/menu_config.cpp
     ${CMAKE_SOURCE_DIR}/src/main/rt64_render_context.cpp
     ${CMAKE_SOURCE_DIR}/src/main/register_overlays.cpp
@@ -296,6 +324,9 @@ add_executable(RogueSquadron64Recomp
     ${MUSYX_AUDIO_C}
     $<$<PLATFORM_ID:Windows>:${CMAKE_SOURCE_DIR}/src/main/app.rc>
 )
+if (TARGET gen_state_table)
+    add_dependencies(RogueSquadron64Recomp gen_state_table)
+endif()
 
 target_include_directories(RogueSquadron64Recomp PRIVATE
     ${CMAKE_SOURCE_DIR}/include
@@ -335,6 +366,32 @@ else()
     target_link_options(RogueSquadron64Recomp PRIVATE -Wl,--allow-multiple-definition)
 endif()
 
+# Standalone unit test for the friendly video-config translation layer.
+# Not part of the default build: cmake --build build --config Debug --target video_config_test
+add_executable(video_config_test EXCLUDE_FROM_ALL
+    ${CMAKE_SOURCE_DIR}/tests/video_config_test.cpp
+    ${CMAKE_SOURCE_DIR}/src/main/video_config.cpp
+    ${CMAKE_SOURCE_DIR}/lib/rt64/src/common/rt64_user_configuration.cpp
+)
+set_target_properties(video_config_test PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+target_include_directories(video_config_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/main
+    ${CMAKE_SOURCE_DIR}/lib/rt64/src
+    ${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib
+)
+
+# Standalone unit test for the nav-sequencer target parser.
+add_executable(nav_target_test EXCLUDE_FROM_ALL
+    ${CMAKE_SOURCE_DIR}/tests/nav_target_test.cpp
+    ${CMAKE_SOURCE_DIR}/src/main/nav_sequencer.cpp
+    ${CMAKE_SOURCE_DIR}/src/main/game_state.cpp
+)
+set_target_properties(nav_target_test PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+target_include_directories(nav_target_test PRIVATE ${CMAKE_SOURCE_DIR}/src/main)
+if (TARGET gen_state_table)
+    add_dependencies(nav_target_test gen_state_table)
+endif()
+
 # ---- SDL2 (Windows: fetch; Linux/Mac: find_package) ----
 if (WIN32)
     include(FetchContent)
@@ -361,6 +418,10 @@ if (WIN32)
         LINK_FLAGS_RELWITHDEBINFO "/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup"
     )
     target_link_libraries(RogueSquadron64Recomp PRIVATE SDL2 Winmm.lib)
+    # We define SDL_MAIN_HANDLED and provide our own main() under /SUBSYSTEM:CONSOLE, so
+    # SDL2main (pulled in transitively) must not be linked: its SDL_windows_main.obj
+    # references SDL_main, which we intentionally do not provide.
+    target_link_options(RogueSquadron64Recomp PRIVATE /NODEFAULTLIB:SDL2main.lib)
 elseif (APPLE)
     find_package(SDL2 REQUIRED)
     find_package(Threads REQUIRED)

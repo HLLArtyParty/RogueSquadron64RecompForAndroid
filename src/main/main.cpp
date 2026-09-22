@@ -23,7 +23,17 @@ static unsigned g_rs64_audio_underruns = 0;   // dry-queue arrivals (see queue_s
 #include "imgui/imgui.h"
 #include "rhi/rt64_render_hooks.h"
 #include "input_bindings.h"
+#include "debug_logs.h"
+#include "main.h"                 // this file's own exports (fullscreen/quit hooks)
+#include "upstream_compat.h"      // rs64_vi_driven
+#include "hook_helpers.h"         // g_vi_tick, g_boot_pulse_start
+#include "nav_sequencer.h"        // rs64_nav_consume, rs64_nav_tick
+#include "rt64_render_context.h"  // recomp::create_render_context
+#include "../rsp/dpc_bridge.h"    // rs64_dpc_drain_histogram
 #include <mutex>
+
+using recomp::dbg::env_on;
+using recomp::dbg::env_int;
 
 #define SDL_MAIN_HANDLED
 #ifdef _WIN32
@@ -105,7 +115,6 @@ extern uint8_t dmem[];
 extern "C" void loadSongAssetByName(uint8_t*, recomp_context*);
 extern "C" void findAudioChannelById(uint8_t*, recomp_context*);
 extern "C" void playSongById(uint8_t*, recomp_context*);
-extern "C" void rs64_dpc_drain_histogram(uint32_t out[64]);
 
 // Cached for the next ucode invocation. get_rsp_microcode is called with the
 // OSTask immediately before the ucode runs on the same thread.
@@ -146,7 +155,8 @@ static RspExitReason musyx_stub(uint8_t* rdram, uint32_t ucode_addr) {
     // The game inits the table to 0xFFFFFFFF later (~task#150), too late for the intro. While the
     // table is still all-zero (uninit), pre-fill the empty slots to 0xFFFFFFFF so the intro load
     // sees real empties. No-ops once any slot is populated (game took over).
-    { static int s_fix = -1; if (s_fix < 0) { const char* e = recomp::os::getenv("ROGUESQ_SONGTABLE_FIX"); s_fix = (e && e[0]=='0') ? 0 : 1; }
+    { static int s_fix = -1;
+      if (s_fix < 0) s_fix = env_on("ROGUESQ_SONGTABLE_FIX", true);
       if (s_fix) { const uint32_t T = 0x139A00u; bool allzero = true;
         for (int i = 0; i < 16; ++i) { uint32_t a = T + i*8;
           if (rdram_be32(rdram, a) != 0) { allzero = false; break; } }
@@ -155,7 +165,7 @@ static RspExitReason musyx_stub(uint8_t* rdram, uint32_t ucode_addr) {
     // ROGUESQ_DUMP_AUDIO_UCODE=1: dump the MusyX ucode TEXT (0x1000B from
     // ucode_addr) + DATA to files for an offline RSPRecomp pass. Once only.
     static int s_dump_en = -1;
-    if (s_dump_en < 0) { const char* e = recomp::os::getenv("ROGUESQ_DUMP_AUDIO_UCODE"); s_dump_en = (e && e[0] && e[0]!='0') ? 1 : 0; }
+    if (s_dump_en < 0) s_dump_en = env_on("ROGUESQ_DUMP_AUDIO_UCODE");
     // Check voice-struct population at several time points (boot → ~25s) to see
     // if the MusyX sample/voice data EVER loads into RDRAM. s_n counts M_AUDTASK
     // (~60/s). At each checkpoint: follow cmdlist voice pointers (+0x08, stride
@@ -229,7 +239,7 @@ static RspExitReason musyx_audio_runner(uint8_t* rdram, uint32_t ucode_addr) {
     // bank is loaded in RAM and at what base (= .samp_base for voice sample ptrs).
     {
         static int s_en = -1, s_found = 0, s_n = 0;
-        if (s_en < 0) { const char* e = recomp::os::getenv("ROGUESQ_LOG_AUDIO_OUT"); s_en = (e && e[0] && e[0] != '0') ? 1 : 0; }
+        if (s_en < 0) s_en = env_on("ROGUESQ_LOG_AUDIO_OUT");
         if (s_en && !s_found && ((++s_n) <= 1 || (s_n % 256) == 0)) {
             static const uint8_t sig[8] = { 0xFC,0x97,0xFF,0x63,0x01,0x58,0x00,0x81 };
             int hitsS = 0, hitsR = 0; uint32_t firstS = 0, firstR = 0;
@@ -287,7 +297,8 @@ static RspExitReason musyx_audio_runner(uint8_t* rdram, uint32_t ucode_addr) {
     }
     // Probe the command list the synth will process — does it actually contain voice commands?
     {
-        static int s_lo = -1; if (s_lo < 0) { const char* e = recomp::os::getenv("ROGUESQ_LOG_AUDIO_OUT"); s_lo = (e && e[0] && e[0] != '0') ? 1 : 0; }
+        static int s_lo = -1;
+        if (s_lo < 0) s_lo = env_on("ROGUESQ_LOG_AUDIO_OUT");
         if (s_lo && (s_n <= 8 || (s_n % 128) == 0)) {
             uint32_t dp = (uint32_t)g_audio_task.t.data_ptr & 0x00FFFFFFu; uint32_t ds = (uint32_t)g_audio_task.t.data_size;
             char hx[260]; int o = 0;
@@ -362,7 +373,8 @@ static RspExitReason musyx_audio_runner(uint8_t* rdram, uint32_t ucode_addr) {
         static int s_tgt = -2;
         if (s_tgt == -2) { const char* e = recomp::os::getenv("ROGUESQ_DUMP_SYNTH_FRAME"); s_tgt = e ? atoi(e) : -1; }
         if (s_tgt >= 0 && s_n == s_tgt) {
-            const char* base = recomp::os::getenv("ROGUESQ_DUMP_SYNTH_PATH"); if (!base || !base[0]) base = "dumps/synth_frame";
+            const char* base = recomp::os::getenv("ROGUESQ_DUMP_SYNTH_PATH");
+            if (!base || !base[0]) base = "dumps/synth_frame";
             char pb[512]; snprintf(pb, sizeof(pb), "%s.bin", base);
             FILE* f = recomp::os::fopen(pb, "wb");
             if (f) { std::vector<uint8_t> img(0x800000); for (uint32_t i = 0; i < 0x800000u; ++i) img[i] = rdram[i ^ 3];
@@ -387,7 +399,8 @@ static RspExitReason musyx_audio_runner(uint8_t* rdram, uint32_t ucode_addr) {
     // buffers live in DMEM 0x600..0xFC0). All-zero => synth bailed early (no active voice). This
     // isolates "ucode not processing voices" from "output not reaching RDRAM/AI".
     {
-        static int s_dm = -1; if (s_dm < 0) { const char* e = recomp::os::getenv("ROGUESQ_LOG_DMEM"); s_dm = (e && e[0] && e[0] != '0') ? 1 : 0; }
+        static int s_dm = -1;
+        if (s_dm < 0) s_dm = env_on("ROGUESQ_LOG_DMEM");
         if (s_dm && (s_n <= 8 || (s_n % 64) == 0)) {
             uint32_t nz = 0; int mx = 0;
             for (uint32_t i = 0x600; i < 0xFC0; ++i) { uint8_t b = dmem[i]; if (b) { ++nz; if (b > mx) mx = b; } }
@@ -401,7 +414,8 @@ static RspExitReason musyx_audio_runner(uint8_t* rdram, uint32_t ucode_addr) {
     // Scans raw bytes so it's swizzle-independent (a non-zero check is order-independent). This
     // isolates "synth produces silence" from "output buffer never reaches SDL" (queue_samples).
     {
-        static int s_lo = -1; if (s_lo < 0) { const char* e = recomp::os::getenv("ROGUESQ_LOG_AUDIO_OUT"); s_lo = (e && e[0] && e[0] != '0') ? 1 : 0; }
+        static int s_lo = -1;
+        if (s_lo < 0) s_lo = env_on("ROGUESQ_LOG_AUDIO_OUT");
         if (s_lo && (s_n <= 8 || (s_n % 128) == 0)) {
             uint32_t ob  = (uint32_t)g_audio_task.t.output_buff & 0x00FFFFFFu;
             uint32_t obs = (uint32_t)g_audio_task.t.output_buff_size;
@@ -610,7 +624,7 @@ RspUcodeFunc* get_rsp_microcode(const OSTask* task) {
             // Runs the RSPRecomp'd MusyX synth (now functional after the text_address=0x1080
             // fix). DEFAULT ON; opt out with ROGUESQ_NO_AUDIO_UCODE=1 to fall back to musyx_stub.
             static int s_au = -1;
-            if (s_au < 0) { const char* e = recomp::os::getenv("ROGUESQ_NO_AUDIO_UCODE"); s_au = (e && e[0] && e[0]!='0') ? 0 : 1; }
+            if (s_au < 0) s_au = env_on("ROGUESQ_NO_AUDIO_UCODE") ? 0 : 1;
             if (s_au) return &musyx_audio_runner;
         }
         return &musyx_stub;
@@ -670,10 +684,11 @@ static void queue_samples(int16_t* samples, size_t num_samples) {
     const size_t num_bytes = num_samples * sizeof(int16_t);
     if (audio_device) {
         // Underrun gauge: the device queue was already dry when this buffer arrived (audible gap).
-        { static int warm = 0; if (++warm > 64 && SDL_GetQueuedAudioSize(audio_device) == 0) ++g_rs64_audio_underruns; }
+        { static int warm = 0;
+          if (++warm > 64 && SDL_GetQueuedAudioSize(audio_device) == 0) ++g_rs64_audio_underruns; }
         // Diagnostic (ROGUESQ_LOG_AUDIO_OUT=1): confirm PCM flows + silence vs content.
         static int s_lo = -1;
-        if (s_lo < 0) { const char* e = recomp::os::getenv("ROGUESQ_LOG_AUDIO_OUT"); s_lo = (e && e[0] && e[0]!='0') ? 1 : 0; }
+        if (s_lo < 0) s_lo = env_on("ROGUESQ_LOG_AUDIO_OUT");
         static int s_q = 0; ++s_q;
         if (s_lo && (s_q <= 8 || (s_q & 255) == 0)) {
             size_t n = num_bytes / 2; int16_t mx = 0;
@@ -767,7 +782,10 @@ static size_t get_frames_remaining() {
     // the Godot value 0.5). Tunable via ROGUESQ_AUDIO_LATENCY_MS (default 60; 0 = off). 100 was
     // audibly late against the picture (2026-09-08); the synth now runs on the retrace thread each VI.
     static int ms = -1;
-    if (ms < 0) { const char* e = recomp::os::getenv("ROGUESQ_AUDIO_LATENCY_MS"); ms = (e && e[0]) ? atoi(e) : 60; if (ms < 0) ms = 0; }
+    if (ms < 0) {
+        ms = env_int("ROGUESQ_AUDIO_LATENCY_MS", 60);
+        if (ms < 0) ms = 0;
+    }
     size_t cushion = (size_t)audio_sample_rate * (unsigned)ms / 1000u;
     return frames > cushion ? frames - cushion : 0;
 }
@@ -1099,11 +1117,92 @@ static SDL_GameController* controller = nullptr;
 // ROGUESQ_AUTO_START=<ms>: once past the gate, pulse START every <ms> to advance
 // through prompts (0/unset = never). Self-test aid only; default OFF.
 static bool fake_controller_enabled() {
-    static bool s = []() {
-        const char* v = recomp::os::getenv("ROGUESQ_FAKE_CONTROLLER");
-        return v && v[0] && v[0] != '0';
-    }();
+    static bool s = env_on("ROGUESQ_FAKE_CONTROLLER");
     return s;
+}
+
+// ROGUESQ_INPUT_SEQ="name:holdMs:afterMs,..." — a scripted virtual-controller
+// timeline injected at get_n64_input (no window focus needed, unlike SendInput).
+// ROGUESQ_INPUT_DELAY=<ms> waits before the first step (default 12000, to clear boot).
+// Names: start a b z l r  dup ddown dleft dright  cup cdown cleft cright
+//        up down left right (analog stick)  wait (neutral hold).
+// Used for headless front-end navigation + state calibration. Default OFF.
+struct InputStep { uint16_t mask; float sx, sy; uint32_t hold, after; };
+
+static bool scripted_input(uint16_t* buttons, float* x, float* y) {
+    static int s_init = -1;
+    static std::vector<InputStep> s_steps;
+    static uint32_t s_delay = 12000;
+    static uint32_t s_t0 = 0;            // wall-clock at first eligible call
+    static bool s_done_logged = false;
+    if (s_init < 0) {
+        s_init = 0;
+        const char* seq = recomp::dbg::env_str("ROGUESQ_INPUT_SEQ");
+        if (seq && *seq) {
+            s_init = 1;
+            s_delay = (uint32_t)env_int("ROGUESQ_INPUT_DELAY", 12000);
+            auto tok = [](const std::string& n) -> InputStep {
+                InputStep s{0, 0.f, 0.f, 90, 400};
+                std::string name = n; size_t c1 = name.find(':');
+                std::string hold, after;
+                if (c1 != std::string::npos) {
+                    size_t c2 = name.find(':', c1 + 1);
+                    hold = name.substr(c1 + 1, (c2 == std::string::npos ? std::string::npos : c2 - c1 - 1));
+                    if (c2 != std::string::npos) after = name.substr(c2 + 1);
+                    name = name.substr(0, c1);
+                }
+                if (!hold.empty()) s.hold = (uint32_t)std::atoi(hold.c_str());
+                if (!after.empty()) s.after = (uint32_t)std::atoi(after.c_str());
+                if      (name == "start") s.mask = N64_START_BUTTON;
+                else if (name == "a")     s.mask = N64_A_BUTTON;
+                else if (name == "b")     s.mask = N64_B_BUTTON;
+                else if (name == "z")     s.mask = N64_Z_TRIG;
+                else if (name == "l")     s.mask = N64_L_TRIG;
+                else if (name == "r")     s.mask = N64_R_TRIG;
+                else if (name == "dup")   s.mask = N64_U_JPAD;
+                else if (name == "ddown") s.mask = N64_D_JPAD;
+                else if (name == "dleft") s.mask = N64_L_JPAD;
+                else if (name == "dright")s.mask = N64_R_JPAD;
+                else if (name == "cup")   s.mask = N64_U_CBUTTONS;
+                else if (name == "cdown") s.mask = N64_D_CBUTTONS;
+                else if (name == "cleft") s.mask = N64_L_CBUTTONS;
+                else if (name == "cright")s.mask = N64_R_CBUTTONS;
+                else if (name == "up")    s.sy = 1.0f;
+                else if (name == "down")  s.sy = -1.0f;
+                else if (name == "left")  s.sx = -1.0f;
+                else if (name == "right") s.sx = 1.0f;
+                // "wait" / unknown -> neutral hold
+                return s;
+            };
+            std::string all(seq), cur;
+            for (size_t i = 0; i <= all.size(); ++i) {
+                if (i == all.size() || all[i] == ',') { if (!cur.empty()) s_steps.push_back(tok(cur)); cur.clear(); }
+                else cur.push_back(all[i]);
+            }
+        }
+    }
+    if (s_init != 1) return false;
+
+    uint32_t now = SDL_GetTicks();
+    if (s_t0 == 0) s_t0 = now;
+    uint32_t elapsed = now - s_t0;
+    if (elapsed < s_delay) { *buttons = 0; *x = 0.f; *y = 0.f; return true; }
+    uint32_t t = elapsed - s_delay;
+    uint32_t acc = 0;
+    for (const InputStep& st : s_steps) {
+        uint32_t span = st.hold + st.after;
+        if (t < acc + span) {
+            bool holding = (t - acc) < st.hold;
+            *buttons = holding ? st.mask : 0;
+            *x = holding ? st.sx : 0.f;
+            *y = holding ? st.sy : 0.f;
+            return true;
+        }
+        acc += span;
+    }
+    if (!s_done_logged) { s_done_logged = true; fprintf(stderr, "[input-seq] sequence complete at t=%ums\n", elapsed); fflush(stderr); }
+    *buttons = 0; *x = 0.f; *y = 0.f;
+    return true;
 }
 
 // Requested by the custom main-menu QUIT entry (menuControllerInput hook).
@@ -1145,8 +1244,8 @@ static void poll_input() {
     apply_fullscreen_if_requested();
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
-        // F6 toggles the controls/rebind window; grave toggles mouse-steering
-        // capture; Esc releases capture or closes the controls window.
+        // F6 toggles the controls/rebind window. Mouse-steering capture is
+        // automatic (focus-driven, in update_gfx) -- no manual toggle.
         if (e.type == SDL_KEYDOWN && e.key.repeat == 0) {
             if (e.key.keysym.scancode == SDL_SCANCODE_RETURN && (e.key.keysym.mod & KMOD_ALT)) {
                 rs64_toggle_fullscreen();   // Alt+Enter: standard fullscreen toggle
@@ -1162,11 +1261,10 @@ static void poll_input() {
                     fprintf(stderr, "[F5] profiler HUD gate 0x80038CE0 -> %u\n", gate);
                     fflush(stderr);
                 }
-            } else if (e.key.keysym.scancode == SDL_SCANCODE_GRAVE) {
-                g_mouse_capture.store(!g_mouse_capture.load());
             } else if (e.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+                // Esc closes the controls window; otherwise it falls through to
+                // the game (bound to Start/pause).
                 if (g_show_controls.load()) g_show_controls.store(false);
-                else g_mouse_capture.store(false);
             }
         }
         if (e.type == SDL_QUIT) {
@@ -1225,7 +1323,7 @@ static void poll_input() {
     // so each bar can be labelled. Addresses are the absolute lw sources in
     // drawFrameProfilerBars; words are stored host-order in the raw RDRAM buf.
     static int s_prof_dump = -1;
-    if (s_prof_dump < 0) { const char* e2 = recomp::os::getenv("ROGUESQ_PROFILER_DUMP"); s_prof_dump = (e2 && *e2 != '0') ? 1 : 0; }
+    if (s_prof_dump < 0) s_prof_dump = env_on("ROGUESQ_PROFILER_DUMP");
     if (s_prof_dump) {
         if (const uint8_t* rd = (const uint8_t*)g_recomp_rdram_for_wp_raw) {
             auto W = [rd](uint32_t va) { return *reinterpret_cast<const uint32_t*>(rd + (va & 0x7FFFFF)); };
@@ -1243,7 +1341,6 @@ static void poll_input() {
 // BOOT_TARGET: while the FrontEnd attract-title is up, the present hook sets this
 // so we inject the native START title-skip. Pulsed (~120ms on / off) because the
 // game's skip reads NEW button presses -- a held START would register only once.
-extern "C" volatile int g_boot_pulse_start;
 static inline uint16_t boot_start_pulse() {
     if (!g_boot_pulse_start) return 0;
     return ((SDL_GetTicks() % 240u) < 120u) ? N64_START_BUTTON : 0;
@@ -1262,6 +1359,16 @@ static bool get_n64_input(int controller_num, uint16_t* buttons, float* x, float
         return true;
     }
 
+    // Headless automation overrides resolved input and must run BEFORE resolve(): keyboard is
+    // enabled by default, so resolve() reports "active" even with no key pressed, which would
+    // otherwise skip the fake-controller branch and swallow injected input.
+    if (fake_controller_enabled()) {
+        uint16_t nb = 0; float nx = 0.f, ny = 0.f;
+        if (rs64_nav_consume(&nb, &nx, &ny)) { *buttons = nb; *x = nx; *y = ny; return true; }
+        uint16_t sb = 0; float sx = 0.f, sy = 0.f;
+        if (scripted_input(&sb, &sx, &sy)) { *buttons = sb; *x = sx; *y = sy; return true; }
+    }
+
     // Resolve keyboard + gamepad + mouse through the bindings profile.
     rs64::input::RawState st;
     st.keys = SDL_GetKeyboardState(&st.keys_len);
@@ -1269,22 +1376,35 @@ static bool get_n64_input(int controller_num, uint16_t* buttons, float* x, float
     st.mouse_active = g_mouse_capture.load();
     // Fire buttons only while steering; middle (Start) works in menus too.
     st.mouse_buttons = st.mouse_active ? g_mouse_btn : (g_mouse_btn & SDL_BUTTON_MMASK);
-    if (st.mouse_active) {
-        st.mouse_dx = g_mouse_ax; st.mouse_dy = g_mouse_ay;
-    }
+    float raw_dx = st.mouse_active ? g_mouse_ax : 0.0f;
+    float raw_dy = st.mouse_active ? g_mouse_ay : 0.0f;
     g_mouse_ax = g_mouse_ay = 0.0f;  // consume this frame's accumulated motion
 
     uint16_t btn = 0;
     bool active;
     { std::lock_guard<std::mutex> lk(g_bindings_mtx);
+      // Frame-rate-aware exponential low-pass on the mouse velocity so fast
+      // flicks ramp in and stop-motion eases back to center, instead of the raw
+      // per-frame delta snapping the stick to full/zero each frame.
+      static uint32_t s_last_ms = 0;
+      static float s_sm_dx = 0.0f, s_sm_dy = 0.0f;
+      uint32_t now = SDL_GetTicks();
+      float dt = s_last_ms ? (float)(now - s_last_ms) : 16.0f;
+      s_last_ms = now;
+      float tau = g_bindings.mouse_smoothing * 100.0f;  // smoothing amount -> ms time constant
+      float alpha = tau > 0.0f ? dt / (dt + tau) : 1.0f;
+      s_sm_dx += (raw_dx - s_sm_dx) * alpha;
+      s_sm_dy += (raw_dy - s_sm_dy) * alpha;
+      st.mouse_dx = s_sm_dx; st.mouse_dy = s_sm_dy;
       active = rs64::input::resolve(g_bindings, st, &btn, x, y); }
 
     if (!active) {
         // No keyboard and no gamepad: keep the fake-controller path so headless
         // runs still clear the "NO CONTROLLER" gate.
         if (fake_controller_enabled()) {
+            // nav/scripted injection already handled above (before resolve).
             static int s_auto = -1;
-            if (s_auto < 0) { const char* v = recomp::os::getenv("ROGUESQ_AUTO_START"); s_auto = (v && v[0]) ? atoi(v) : 0; }
+            if (s_auto < 0) s_auto = env_int("ROGUESQ_AUTO_START", 0);
             uint16_t fb = 0;
             if (s_auto > 0 && (SDL_GetTicks() % (uint32_t)s_auto) < 120u) fb |= N64_START_BUTTON;
             fb |= boot_start_pulse();
@@ -1296,7 +1416,7 @@ static bool get_n64_input(int controller_num, uint16_t* buttons, float* x, float
     }
 
     static int s_auto = -1;
-    if (s_auto < 0) { const char* v = recomp::os::getenv("ROGUESQ_AUTO_START"); s_auto = (v && v[0]) ? atoi(v) : 0; }
+    if (s_auto < 0) s_auto = env_int("ROGUESQ_AUTO_START", 0);
     if (s_auto > 0 && (SDL_GetTicks() % (uint32_t)s_auto) < 120u) btn |= N64_START_BUTTON;
     btn |= boot_start_pulse();
     *buttons = btn;
@@ -1346,10 +1466,12 @@ static void draw_controls_ui() {
         {
             std::lock_guard<std::mutex> lk(g_bindings_mtx);
             ImGui::SliderFloat("Mouse sensitivity", &g_bindings.mouse_sensitivity, 0.005f, 0.30f, "%.3f");
+            ImGui::SliderFloat("Mouse smoothing", &g_bindings.mouse_smoothing, 0.0f, 1.0f, "%.2f");
+            ImGui::SliderFloat("Mouse response curve", &g_bindings.mouse_curve, 1.0f, 3.0f, "%.2f");
             ImGui::Checkbox("Invert X", &g_bindings.mouse_invert_x); ImGui::SameLine();
             ImGui::Checkbox("Invert Y", &g_bindings.mouse_invert_y);
         }
-        ImGui::TextDisabled("Backtick toggles mouse-steering; F6 or Esc closes this.");
+        ImGui::TextDisabled("Mouse-steering is automatic while the window is focused; F6 or Esc closes this.");
         {
             bool fs = rs64_get_fullscreen() != 0;
             if (ImGui::Checkbox("Fullscreen", &fs)) rs64_set_fullscreen(fs);
@@ -1506,6 +1628,10 @@ static void draw_dev_ui() {
 ultramodern::gfx_callbacks_t::gfx_data_t create_gfx() {
     SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
     SDL_SetHint(SDL_HINT_GAMECONTROLLER_USE_BUTTON_LABELS, "0");
+#ifndef NDEBUG
+    // Debug builds: don't steal focus from the editor when the window first shows.
+    SDL_SetHint(SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN, "1");
+#endif
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO) != 0) {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         exit(EXIT_FAILURE);
@@ -1513,17 +1639,16 @@ ultramodern::gfx_callbacks_t::gfx_data_t create_gfx() {
     return nullptr;
 }
 
-// Defined in rt64_render_context.cpp
-namespace recomp {
-    std::unique_ptr<ultramodern::renderer::RendererContext>
-    create_render_context(uint8_t* rdram, ultramodern::renderer::WindowHandle window_handle, bool developer_mode);
-}
 
 ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::gfx_data_t) {
     // On non-Windows RT64 renders through Vulkan and needs the window created
     // with SDL_WINDOW_VULKAN so SDL_Vulkan_CreateSurface can bind to it. On
     // Windows the backend is D3D12 via the HWND, so the flag is omitted.
-    Uint32 window_flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN;
+    // ROGUESQ_HIDE_WINDOW=1: create the window hidden so headless runs are a true background
+    // process (no visible window). The HWND/surface is still valid, so RT64 keeps rendering and
+    // presenting and the VI-paced loop proceeds; only on-screen display + window screenshots are lost.
+    const bool hide_window = env_on("ROGUESQ_HIDE_WINDOW");
+    Uint32 window_flags = SDL_WINDOW_RESIZABLE | (hide_window ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN);
 #ifndef _WIN32
     window_flags |= SDL_WINDOW_VULKAN;
 #endif
@@ -1565,14 +1690,21 @@ void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
     // Build the menu config once here on the main thread (early, before the menu),
     // so the game-thread menu hooks never do the file I/O + mod-mutex work that
     // config() does on its first call -- that races with menu-audio init.
-    { static bool s_cfg = false; if (!s_cfg) { s_cfg = true; rs64_menu_config_init(); } }
+    { static bool s_cfg = false;
+      if (!s_cfg) { s_cfg = true; rs64_menu_config_init(); } }
 
-    // Mouse-steering capture: relative mode on only while engaged and focused.
-    // Toggled from the game thread (grave/Esc in poll_input); applied here on the
-    // window-owning thread. Drain the accumulator on each transition so enabling
-    // doesn't produce a jump from motion that happened while released.
+    // Mouse-steering capture is implicit: on whenever the window is focused,
+    // released when focus is lost, the F6 controls window is open, or RT64's F1
+    // inspector is up (so the cursor is free for ImGui). Computed here on the
+    // window-owning thread -- SDL_PumpEvents above just ran RT64's filter, so the
+    // inspector state is current. g_mouse_capture drives motion accumulation and
+    // st.mouse_active on the game thread. Drain the accumulator on each transition
+    // so enabling doesn't produce a jump from motion that happened while released.
+    bool want = (SDL_GetKeyboardFocus() != nullptr)
+             && !g_show_controls.load()
+             && !rs64_rt64_inspector_open();
+    g_mouse_capture.store(want);
     static bool s_rel = false;
-    bool want = g_mouse_capture.load() && !g_show_controls.load() && (SDL_GetKeyboardFocus() != nullptr);
     if (want != s_rel) {
         SDL_SetRelativeMouseMode(want ? SDL_TRUE : SDL_FALSE);
         SDL_GetRelativeMouseState(nullptr, nullptr);
@@ -1597,18 +1729,12 @@ void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
 // primes the barriers so the NOBLOCK instruction patches can later be reverted
 // (step 2) and the game loop will pace to the real VI instead of running free.
 // Disable with ROGUESQ_VI_BARRIER_SIGNAL=0.
-extern "C" volatile unsigned g_vi_tick;  // defined in upstream_compat.cpp
-
-extern "C" int rs64_vi_driven(void);      // upstream_compat.cpp: ROGUESQ_VI_DRIVEN_LOOP
 static void rs64_vi_callback() {
     ++g_vi_tick;
     if (rs64_vi_driven()) return;   // hardware protocol: no host-injected tokens (they double-signal size-1 queues)
     --g_vi_tick;
     static int s_on = -1;
-    if (s_on < 0) {
-        const char* e = recomp::os::getenv("ROGUESQ_VI_BARRIER_SIGNAL");
-        s_on = (e && e[0] == '0') ? 0 : 1;
-    }
+    if (s_on < 0) s_on = env_on("ROGUESQ_VI_BARRIER_SIGNAL", true);
     // Tick for rs64_attrib_wait_vi (attribution loop paces to the real VI).
     ++g_vi_tick;
     if (!s_on) {
@@ -1622,7 +1748,7 @@ static void rs64_vi_callback() {
     // bufferArbiterProducerScanWait drain-barrier hangs (boot "freeze" at iter ~903). Posting the
     // registered message (0x8011A4CC) every VI wakes it to drain buffers. ROGUESQ_VI_RETRACE_SIGNAL=0 to disable.
     static int s_vr = -1;
-    if (s_vr < 0) { const char* e = recomp::os::getenv("ROGUESQ_VI_RETRACE_SIGNAL"); s_vr = (e && e[0] == '0') ? 0 : 1; }
+    if (s_vr < 0) s_vr = env_on("ROGUESQ_VI_RETRACE_SIGNAL", true);
     if (s_vr) {
         ultramodern::enqueue_external_message((PTR(OSMesgQueue))0x80114388u, (OSMesg)0x8011A4CCu, false, false);
     }
@@ -1633,7 +1759,7 @@ static void rs64_vi_callback() {
     // iter ~891). Posting a token each VI gives it a 60Hz frame-sync pulse so it proceeds (the
     // recv discards the message value). ROGUESQ_VI_FRAMESYNC_SIGNAL=0 to disable.
     static int s_fs = -1;
-    if (s_fs < 0) { const char* e = recomp::os::getenv("ROGUESQ_VI_FRAMESYNC_SIGNAL"); s_fs = (e && e[0] == '0') ? 0 : 1; }
+    if (s_fs < 0) s_fs = env_on("ROGUESQ_VI_FRAMESYNC_SIGNAL", true);
     if (s_fs) {
         ultramodern::enqueue_external_message((PTR(OSMesgQueue))0x80128D10u, (OSMesg)0, false, false);
     }
@@ -1648,7 +1774,7 @@ static void rs64_vi_callback() {
     // The op_b5 DL-walk bound (rt64_gbi_f3dfactor5.cpp) is what stabilized the cinematic; this
     // signal is opt-in for further frame-pacing experiments. ROGUESQ_VI_VIDEOQ_SIGNAL=1 to enable.
     static int s_vq = -1;
-    if (s_vq < 0) { const char* e = recomp::os::getenv("ROGUESQ_VI_VIDEOQ_SIGNAL"); s_vq = (e && e[0] && e[0] != '0') ? 1 : 0; }
+    if (s_vq < 0) s_vq = env_on("ROGUESQ_VI_VIDEOQ_SIGNAL");
     if (s_vq) {
         ultramodern::enqueue_external_message((PTR(OSMesgQueue))0x80128CF0u, (OSMesg)0, false, false);
     }
@@ -1766,10 +1892,7 @@ static void write_minidump_safe(EXCEPTION_POINTERS* ep) {
     // stack trace in the .log already covers the common debug case; the
     // dump only needs threads + stacks + indirectly-referenced memory.
     // Set ROGUESQ_FULL_DUMP=1 to restore the full 5 GB dump for deep-dives.
-    static const bool s_full_dump = []{
-        const char *e = recomp::os::getenv("ROGUESQ_FULL_DUMP");
-        return e && *e && *e != '0';
-    }();
+    static const bool s_full_dump = env_on("ROGUESQ_FULL_DUMP");
     MINIDUMP_TYPE dumpType = s_full_dump
         ? MiniDumpWithFullMemory
         : (MINIDUMP_TYPE)(MiniDumpNormal
@@ -1844,6 +1967,7 @@ static const CliFlag kCliFlags[] = {
     {"render-song",      "ROGUESQ_RENDER_SONG",      CliFlag::Value, "",  "",  "force a specific song key (0 = N64-logo music)"},
     {"fake-controller",  "ROGUESQ_FAKE_CONTROLLER",  CliFlag::Bool,  "1", "0", "fake a connected controller (headless runs)"},
     {"auto-start",       "ROGUESQ_AUTO_START",       CliFlag::Value, "",  "",  "pulse START after <ms> (headless runs)"},
+    {"hide-window",      "ROGUESQ_HIDE_WINDOW",      CliFlag::Bool,  "1", "0", "create the window hidden (background process; no display/screenshots)"},
     {"boot-target",      "ROGUESQ_BOOT_TARGET",      CliFlag::Value, "",  "",  "skip the intro to a target: menu | demo:N (N=0-5)"},
 };
 
@@ -2007,7 +2131,8 @@ int main(int argc, char* argv[]) {
             "[TERMINATE] tid=%lu is_game_thread=%d thread_self=0x%08X modbase=0x%p\n",
             GetCurrentThreadId(), (int)ultramodern::is_game_thread(),
             (uint32_t)ultramodern::this_thread(), (void*)modbase);
-        fputs(line, stderr); if (tf) fputs(line, tf);
+        fputs(line, stderr);
+        if (tf) fputs(line, tf);
         const char* extype = "no in-flight exception";
         char exbuf[256] = {0};
         if (std::exception_ptr ep = std::current_exception()) {
@@ -2019,16 +2144,20 @@ int main(int argc, char* argv[]) {
             catch (...) { extype = "uncaught non-std exception"; }
         }
         snprintf(line, sizeof(line), "[TERMINATE] %s\n", extype);
-        fputs(line, stderr); if (tf) fputs(line, tf);
+        fputs(line, stderr);
+        if (tf) fputs(line, tf);
         void* frames[62];
         USHORT count = RtlCaptureStackBackTrace(0, 62, frames, nullptr);
-        fputs("[TERMINATE] stack RVAs:", stderr); if (tf) fputs("[TERMINATE] stack RVAs:", tf);
+        fputs("[TERMINATE] stack RVAs:", stderr);
+        if (tf) fputs("[TERMINATE] stack RVAs:", tf);
         for (USHORT i = 0; i < count; i++) {
             snprintf(line, sizeof(line), " 0x%llX",
                 (unsigned long long)((uintptr_t)frames[i] - modbase));
-            fputs(line, stderr); if (tf) fputs(line, tf);
+            fputs(line, stderr);
+            if (tf) fputs(line, tf);
         }
-        fputs("\n", stderr); if (tf) { fputs("\n", tf); fflush(tf); fclose(tf); }
+        fputs("\n", stderr);
+        if (tf) { fputs("\n", tf); fflush(tf); fclose(tf); }
         print_stack_with_symbols(frames, count);  // symbolized to stderr when a PDB exists
         write_minidump_safe(nullptr);
         _Exit(3);

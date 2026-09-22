@@ -452,40 +452,10 @@ func = "menuOverlayInit"
 vram = 0x800C593C
 value = 0x00000000
 
-# ROGUESQ_BOOT_TARGET=level:<id>[,craft] -- boot straight into a playable mission.
-# This is the one game-thread seam after the boot save-load + front-end state write
-# (runIdleFramesAndLoadSaveData sets gGameSettings+0x20=1 / +0x21=0 to route to the
-# FrontEnd) and before mainGameLoop's dispatch loop. We overwrite that with the
-# run-mission state (+0x04=3, +0x22=1) + the chosen level/craft, so the dispatch enters
-# applyLevelScreenAndCameraSettings -> initMission -> runInMissionFrame with LIVE input.
-# See plans/boot-into-mission-plan.md. Host spec: rs64_boot_target_level (upstream_compat.cpp).
-[[patches.hook]]
-func = "runIdleFramesAndLoadSaveData"
-before_vram = 0x8006DB18   # epilogue: after applyAccountUnlocksToSettings, before jr $ra
-text = '''{
-    static int s_done = 0;
-    if (!s_done) {
-        s_done = 1;
-        extern int rs64_boot_target_level(int* craft_out);
-        int craft = -1;
-        int lvl = rs64_boot_target_level(&craft);
-        if (lvl >= 0) {
-            rdram[0x130B40 ^ 3] = (uint8_t)lvl;          // gGameSettings[0] level
-            rdram[0x130B70 ^ 3] = (uint8_t)lvl;          // gCurrentLevel
-            if (craft >= 0) rdram[0x130B41 ^ 3] = (uint8_t)craft;  // craft
-            // master state 1 = mission PREP: mainGameLoop runs initializeNumLives + the
-            // level intro, then sets +0x22/+0x04=3 itself and enters the mission. Entering
-            // at +0x04=3 directly skips that prep -> mission exits instantly (0 lives).
-            rdram[0x130B44 ^ 3] = 1;                     // +0x04 master state -> mission prep
-            rdram[0x130B65 ^ 3] = 1;                     // +0x25 != 0 -> state-1 launch gate (else it bails)
-            rdram[0x130B61 ^ 3] = 1;                     // +0x21 != 0 -> skip front-end attract block
-            rdram[0x130B60 ^ 3] = 0;                     // +0x20 menu sub-state off
-            rdram[0x130B62 ^ 3] = 0;                     // +0x22 off (state 1 sets it on launch)
-            rdram[0x130B3B ^ 3] = 0xFF;                  // force level/craft unlocks
-            rdram[0x130B2D ^ 3] = 0xFF;
-        }
-    }
-}'''
+# ROGUESQ_BOOT_TARGET=level:<id>[,craft] is now handled by the nav_sequencer (a state-gated
+# menu drive) instead of poking mission-prep fields here -- the old field-poke reached mission
+# PREP then bailed to attract (jumping the state machine). See nav_sequencer.cpp and
+# plans/2026-09-22-boot-target-nav-engine-design.md. No boot hook needed.
 
 # dpInterruptHandlerThread gates forwarding to game queue D_8011A7E8 on flag
 # 0x8011A89D, which never becomes 1 here -> game thread blocks forever. NOP the

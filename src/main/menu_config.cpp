@@ -32,9 +32,7 @@
 // Phase 1b.
 
 namespace recomp { void* alloc(uint8_t* rdram, size_t size); }
-extern "C" void rs64_menu_request_quit(void);   // main.cpp
-extern "C" void rs64_toggle_fullscreen(void);   // main.cpp
-extern "C" int  rs64_get_fullscreen(void);      // main.cpp
+#include "main.h"   // rs64_menu_request_quit, rs64_toggle_fullscreen, rs64_get_fullscreen
 
 namespace {
 
@@ -71,6 +69,18 @@ constexpr int16_t YESNO_X = -0x40;
 bool env_disabled(const char* name) {
     const char* v = recomp::os::getenv(name);
     return v && *v && *v != '0';
+}
+
+// The custom front-end menu is suppressed when ROGUESQ_NO_MENU_BUTTONS is set, OR for the demo
+// boot target -- the custom menu displaces the original title's attract-idle path, so demo needs
+// the stock front end. See project_boot_target_nav_engine memory / nav_sequencer.cpp.
+bool menu_buttons_off() {
+    static const bool off = [] {
+        if (env_disabled("ROGUESQ_NO_MENU_BUTTONS")) return true;
+        const char* bt = recomp::os::getenv("ROGUESQ_BOOT_TARGET");
+        return bt && std::strncmp(bt, "demo", 4) == 0;
+    }();
+    return off;
 }
 
 // A game_settings toggle that `replace`s a known native toggle slot flips in place
@@ -498,7 +508,10 @@ bool anchor_order(const std::vector<Item>& items, uint8_t menu_id,
                   const std::string& name, double& out) {
     const auto* aliases = native_aliases(menu_id);
     const NativeAlias* na = nullptr;
-    if (aliases) { auto it = aliases->find(name); if (it != aliases->end()) na = &it->second; }
+    if (aliases) {
+        auto it = aliases->find(name);
+        if (it != aliases->end()) na = &it->second;
+    }
     for (const auto& it : items) {
         if (it.is_native && na && alias_matches(it.slot, *na)) { out = it.order; return true; }
         if (!it.is_native && it.binding.key == name)           { out = it.order; return true; }
@@ -760,7 +773,7 @@ extern "C" void rs64_menu_config_mark_dirty(void) {}
 extern "C" void rs64_menu_config_init(void) { (void)config(); }
 
 extern "C" void rs64_menu_install_main(uint8_t* rdram) {
-    static const bool off = env_disabled("ROGUESQ_NO_MENU_BUTTONS");
+    static const bool off = menu_buttons_off();
     if (off) return;
     for (int i = 0; i < MAX_ENTRIES; ++i) s_slot[i] = {};
 
@@ -793,7 +806,7 @@ extern "C" void rs64_menu_install_main(uint8_t* rdram) {
 }
 
 extern "C" void rs64_menu_confirm_main(uint8_t* rdram) {
-    static const bool off = env_disabled("ROGUESQ_NO_MENU_BUTTONS");
+    static const bool off = menu_buttons_off();
     if (off) return;
     uint8_t e = rd_b(rdram, GCMD_OFF + 0x94);   // highlighted entry
 
