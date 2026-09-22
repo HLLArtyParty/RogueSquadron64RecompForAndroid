@@ -246,10 +246,6 @@ endif()
 #     Triangles get emitted as raw RDP bytes via DPC_END writes; src/rsp/
 #     dpc_bridge.cpp forwards them into RT64 via submit_rdp_range.
 #
-# A pure HLE replacement for the LLE side is feasible (op_01..op_04 plus
-# triangle assembly are tractable handlers, contrary to factor5-gbi.md's
-# original "GBI-level plan is closed" conclusion) but is multi-day work.
-# Keeping LLE for now lets us ship visuals while migrating ops one at a time.
 set(FACTOR5_UCODE_C ${CMAKE_SOURCE_DIR}/build/factor5_ucode/factor5_ucode_recompiled.c)
 set(FACTOR5_BOOT_C  ${CMAKE_SOURCE_DIR}/build/factor5_ucode/factor5_boot_recompiled.c)
 # MusyX audio synthesis ucode (RSPRecomp'd from ROM 0x9ABE0 via musyx_rsp.toml).
@@ -297,7 +293,6 @@ set_source_files_properties(${FACTOR5_UCODE_C} ${FACTOR5_BOOT_C} ${MUSYX_AUDIO_C
     COMPILE_OPTIONS "-msse4.1;${RSP_UCODE_FORCE_INCLUDE}")
 
 # Generate the game-state table header from the canonical descriptor (state_model.toml).
-# See plans/2026-09-22-game-state-model-design.md.
 set(STATE_TABLE_INL ${CMAKE_SOURCE_DIR}/src/main/state_table.inl)
 if (Python3_Interpreter_FOUND)
     add_custom_command(
