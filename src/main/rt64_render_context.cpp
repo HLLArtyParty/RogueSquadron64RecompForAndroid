@@ -10,6 +10,7 @@
 #include <fstream>
 #include "SDL.h"
 #include "common/rt64_user_configuration.h"
+#include "video_config.h"
 
 #ifndef HLSL_CPU
 #define HLSL_CPU
@@ -199,21 +200,18 @@ public:
             if (char* base = SDL_GetBasePath()) { cfgPath = base; SDL_free(base); }
             cfgPath += "roguesq_video.json";
             video_cfg_path_ = cfgPath;                           // enables F1-menu save-back
-            json baseJson = app->userConfig;                     // baseline as json (ADL to_json)
-            std::ifstream in(cfgPath);
-            if (in.is_open()) {
-                try {
-                    json fileJson; in >> fileJson;
-                    baseJson.update(fileJson);                   // file overrides baseline keys
-                    app->userConfig = baseJson.get<UC>();        // ADL from_json (absent keys keep baseline)
-                    app->userConfig.validate();
-                    fprintf(stderr, "[RT64] loaded %s\n", cfgPath.c_str());
-                } catch (const std::exception &e) {
-                    fprintf(stderr, "[RT64] roguesq_video.json parse error (%s); using defaults\n", e.what());
+            rs64::video::LoadResult lr = rs64::video::load(app->userConfig, cfgPath);
+            if (lr.loaded) {
+                fprintf(stderr, "[RT64] loaded %s%s\n", cfgPath.c_str(),
+                        lr.migrated ? " (migrated to friendly schema)" : "");
+            }
+            if (!lr.loaded || lr.migrated) {
+                std::ofstream out{cfgPath, std::ios::trunc};
+                if (out) {
+                    out << rs64::video::to_friendly(app->userConfig).dump(2) << "\n";
+                    fprintf(stderr, "[RT64] wrote %s %s\n", cfgPath.c_str(),
+                            lr.migrated ? "(migrated)" : "(default)");
                 }
-            } else if (std::ofstream out{cfgPath, std::ios::trunc}) {
-                out << baseJson.dump(2) << "\n";
-                fprintf(stderr, "[RT64] wrote default %s\n", cfgPath.c_str());
             }
         }
 
@@ -316,7 +314,7 @@ public:
         }
 
         // Snapshot the resolved config; update_screen rewrites roguesq_video.json when the F1 menu edits it.
-        try { json snap = app->userConfig; video_cfg_snapshot_ = snap.dump(); } catch (...) {}
+        try { video_cfg_snapshot_ = rs64::video::to_friendly(app->userConfig).dump(); } catch (...) {}
 
         uint32_t thread_id = 0;
 #ifdef _WIN32
@@ -507,7 +505,7 @@ private:
         if (video_cfg_path_.empty() || !app) return;
         if ((vi_count_ % 15) != 0) return;                 // ~4x/sec; config changes are rare
         std::string cur;
-        try { json j = app->userConfig; cur = j.dump(); } catch (...) { return; }
+        try { cur = rs64::video::to_friendly(app->userConfig).dump(); } catch (...) { return; }
         if (cur == video_cfg_snapshot_) return;
         video_cfg_snapshot_ = cur;
         std::ofstream out(video_cfg_path_, std::ios::trunc);

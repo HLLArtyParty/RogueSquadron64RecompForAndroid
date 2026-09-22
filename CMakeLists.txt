@@ -299,6 +299,7 @@ set_source_files_properties(${FACTOR5_UCODE_C} ${FACTOR5_BOOT_C} ${MUSYX_AUDIO_C
 add_executable(RogueSquadron64Recomp
     ${CMAKE_SOURCE_DIR}/src/main/main.cpp
     ${CMAKE_SOURCE_DIR}/src/main/input_bindings.cpp
+    ${CMAKE_SOURCE_DIR}/src/main/video_config.cpp
     ${CMAKE_SOURCE_DIR}/src/main/menu_config.cpp
     ${CMAKE_SOURCE_DIR}/src/main/rt64_render_context.cpp
     ${CMAKE_SOURCE_DIR}/src/main/register_overlays.cpp
@@ -349,6 +350,20 @@ else()
     # override wins; without this ld treats the duplicate as fatal.
     target_link_options(RogueSquadron64Recomp PRIVATE -Wl,--allow-multiple-definition)
 endif()
+
+# Standalone unit test for the friendly video-config translation layer.
+# Not part of the default build: cmake --build build --config Debug --target video_config_test
+add_executable(video_config_test EXCLUDE_FROM_ALL
+    ${CMAKE_SOURCE_DIR}/tests/video_config_test.cpp
+    ${CMAKE_SOURCE_DIR}/src/main/video_config.cpp
+    ${CMAKE_SOURCE_DIR}/lib/rt64/src/common/rt64_user_configuration.cpp
+)
+set_target_properties(video_config_test PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+target_include_directories(video_config_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/main
+    ${CMAKE_SOURCE_DIR}/lib/rt64/src
+    ${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib
+)
 
 # ---- SDL2 (Windows: fetch; Linux/Mac: find_package) ----
 if (WIN32)
