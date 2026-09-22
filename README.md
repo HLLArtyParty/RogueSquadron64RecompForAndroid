@@ -295,7 +295,7 @@ Using an AI Agent properly comes down to handing it the *right set of tools*, *t
 
 This repo already provides **AGENTS.MD** and **skill** files. **MCP** servers are configured and setup by the user themselves and is something we can't force/mandate. Beyond MCP are things called **harnesses** which can be a tool to perform tasks or orchestrate agents to perform a set of tasks at once. This repo contains some harness in `tools` to performs test, perform multiple runs to verify robustness or drive an agent to particular menu to chase a bug.
 
-Once you're agent is setup tasks that would've taken weeks/months/years to do can be done in a single day/week.
+Once your agent is setup tasks that would've taken weeks/months/years to do can be done in a single day/week.
 
 Here's a list of MCPs that could useful for this project:
 
