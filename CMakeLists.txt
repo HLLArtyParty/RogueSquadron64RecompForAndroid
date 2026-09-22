@@ -95,6 +95,10 @@ else()
         -fno-strict-aliasing
         -Wno-unused-variable
         -Wno-implicit-function-declaration
+        # Match the MSVC branch's force-include: supplies MEM_WU (unsigned-word
+        # RDRAM access) that upstream recomp.h omits. GCC/Clang syntax is
+        # `-include <file>` (two tokens), not clang-cl's glued /FI.
+        -include "${CMAKE_SOURCE_DIR}/include/rsp_dpc_macros.h"
     )
 endif()
 
@@ -266,9 +270,16 @@ if (Python3_Interpreter_FOUND AND EXISTS ${MUSYX_AUDIO_C})
         RESULT_VARIABLE MUSYX_AUDIO_FIXUP_RESULT
     )
 endif()
+# Force-include rsp_dpc_macros.h (RSP DPC MMIO bridge macros). clang-cl wants
+# the glued /FI form; GCC/Clang want `-include <file>` as two tokens.
+if (MSVC)
+    set(RSP_UCODE_FORCE_INCLUDE "/FI${CMAKE_SOURCE_DIR}/include/rsp_dpc_macros.h")
+else()
+    set(RSP_UCODE_FORCE_INCLUDE "-include;${CMAKE_SOURCE_DIR}/include/rsp_dpc_macros.h")
+endif()
 set_source_files_properties(${FACTOR5_UCODE_C} ${FACTOR5_BOOT_C} ${MUSYX_AUDIO_C} PROPERTIES
     LANGUAGE CXX
-    COMPILE_OPTIONS "-msse4.1;/FI${CMAKE_SOURCE_DIR}/include/rsp_dpc_macros.h")
+    COMPILE_OPTIONS "-msse4.1;${RSP_UCODE_FORCE_INCLUDE}")
 
 add_executable(RogueSquadron64Recomp
     ${CMAKE_SOURCE_DIR}/src/main/main.cpp
@@ -315,6 +326,13 @@ if (MSVC)
     # can switch to /FORCE:MULTIPLE only on the patched-symbol set via a
     # per-symbol .def or by carving out the patched .obj from RecompiledFuncs.
     target_link_options(RogueSquadron64Recomp PRIVATE /FORCE:MULTIPLE)
+else()
+    # GNU ld equivalent of /FORCE:MULTIPLE. src/main overrides (osVi*_recomp in
+    # upstream_compat.cpp, submit_rdp_range in rt64_render_context.cpp, and the
+    # PatchesLib symbols) intentionally redefine symbols that also live in the
+    # librecomp/ultramodern archives. Command-line objects come first, so the
+    # override wins; without this ld treats the duplicate as fatal.
+    target_link_options(RogueSquadron64Recomp PRIVATE -Wl,--allow-multiple-definition)
 endif()
 
 # ---- SDL2 (Windows: fetch; Linux/Mac: find_package) ----
