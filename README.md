@@ -9,6 +9,7 @@
 
 A static recompilation of **Star Wars: Rogue Squadron** (N64, USA v1.0) built with [N64Recomp](https://github.com/N64Recomp/N64Recomp) and [N64ModernRuntime](https://github.com/N64Recomp/N64ModernRuntime), rendering through a forked [RT64](https://github.com/MikeSemicolonD/rt64) that understands Factor 5's custom display-list format.
 
+> [!IMPORTANT]
 > **Work in progress and Heavily AI-assisted.**
 > Most of the debugging, architectural decisions, and code here (the F3DFACTOR5 GBI module, the runtime patches inside `lib/`, `src/main/`, the `patches/` pipeline, the diagnostic env vars) were produced with Claude.
 
@@ -165,12 +166,12 @@ default **Luke** controller setting; the other presets in Options rearrange them
 **Mouse flight steering:** mouse capture is automatic while the game window is
 focused — mouse motion steers the craft, left click fires blasters, right click
 fires the secondary weapon. Capture releases when the window loses focus, when
-the controls window (F6) is open, or when RT64's F1 inspector is up, so the
+the controls window (**F6**) is open, or when RT64's **F1** inspector is up, so the
 cursor is free for other windows.
 
-In Debug builds F1/F3/F4 also toggle RT64 developer tools.
+In Debug builds **F1/F3/F4** also toggle RT64 developer tools.
 
-F1 toggles RT64's ImGui overlay (configuration, texture dumping, per-call debugger, render-target view). F3 toggles ViewRDRAM mode and F4 toggles texture replacement.
+**F1** toggles RT64's ImGui overlay (configuration, texture dumping, per-call debugger, render-target view). **F3** toggles ViewRDRAM mode and **F4** toggles texture replacement.
 
 ### Rebinding controls
 
@@ -180,6 +181,7 @@ binding. Adjust mouse sensitivity and invert there, then **Save** (or **Restore
 defaults**). Bindings persist to `roguesq_input.json` next to the executable,
 which you can also hand-edit.
 
+> [!TIP]
 > In Debug builds (developer mode on by default) the RT64 inspector owns the ImGui overlay, so press **F1** once before **F6**.
 > Release builds open the Controls window with **F6** directly.
 
@@ -187,19 +189,28 @@ which you can also hand-edit.
 
 ## Status (PLAYABLE)
 
+> [!NOTE]
 > I have personally managed to play it (on windows) all the way through from the first level to the credits sequence.
 
 Issues:
 
 - Text and background during the Credit sequence renders incorrectly, with it clipping letters. The background has some slight visual artifacts as well. (Happens after completing the game, NOT when the 'CREDITS' passcode is entered. Meaning that the issue probably stems from the ending cutscene that plays prior to the credits)
 
+- Sometimes when starting up the game it'll freeze when fading to black on the Attribution screen (it happens rarely, but if it does just restart it)
+
+- A visible ring near the skybox's horizon will sometimes overlap geometry that has a transparent material (This is most likely a depth sorting issue)
+
 - Some CPU performance hitching and slow down (~20fps) in spots (although not as bad as the real n64 game)
+
 - Cutscenes having screen sizes of varying widths which could genuinely be an issue with the game itself.
-- Some slight graphical glitches in spots like how some cutscenes display the edge of the terrain as it renders when the fog should be covering it.
+
+- Some slight graphical glitches in spots like how the final cutscene after completing "Battle of Calamari" will display the edge of the terrain as it renders when the fog should be covering it. (I think on real hardware during this cutscene in particular fog settings change to account for the perspective)
 
 - Frame interpolation *can be enabled* **BUT** it causes visual glitches due to how objects are ID'd. (The biggest pain point on this is the terrain which generates/changes on the fly causing the whole terrain to visually stutter) The performance hitches also causes frame stutter when interpolation is enabled.
 
 - Low Resolution mode works but affects how cutscenes are displayed with them appearing more wide than they probably should be.
+
+- Very slight cut off at the top of text rects BUT this also existed in the original game.
 
 ---
 
@@ -275,6 +286,34 @@ Each option maps to a `ROGUESQ_*` environment variable, which still works (a bar
 ### Local save editor tool
 
 A save editor also exists in *`tools/save-editor`* as an HTML page. Allowing a user to easily create, edit and export a save into any of the following formats: .*`.bin, .eep, .srm, .sra and .raw`*
+
+---
+
+### 'Proper' AI Agent Usage
+
+Using an AI Agent properly comes down to handing it the *right set of tools*, *the right resources/knowledge to perform the work* and *instructions*. **AGENTS.MD** provides the baseline instructions for your agent to make changes to this project. In addition to that, **skill** files *(just like AGENTS.MD)* are use to provide instructions for things like tools, specific task and/or processes. **MCP** servers/tools can further augment existing application by giving handles/methods for agents to *better* perform tasks.
+
+This repo already provides **AGENTS.MD** and **skill** files. **MCP** servers are configured and setup by the user themselves and is something we can't force/mandate. Beyond MCP are things called **harnesses** which can be a tool to perform tasks or orchestrate agents to perform a set of tasks at once. This repo contains some harness in `tools` to performs test, perform multiple runs to verify robustness or drive an agent to particular menu to chase a bug.
+
+Once you're agent is setup tasks that would've taken weeks/months/years to do can be done in a single day/week.
+
+Here's a list of MCPs that could useful for this project:
+
+- [renderdoc](https://github.com/Linkingooo/renderdoc-mcp) (Requires [RenderDoc source code](https://github.com/baldurk/renderdoc) and [python 3.10+](https://www.python.org/downloads/) to compile the `renderdoc.pyd` that this MCP needs)
+- [windows-screenshot-mcp-server](https://github.com/MikeSemicolonD/windows-screenshot-mcp-server) (Requires [go 1.25.2](https://go.dev/dl/))
+
+> [!CAUTION]
+> `windows-screenshot-mcp-server` usage can be finicky because Claude (as of September 2026) has no visual capabilities, meaning it can miss things that are visually obvious to a human like visual glitches/artifacts. Claude can *at most* look at the pixel values in the image to figure out what it's looking at. (Technically no vision capable but good surprisingly enough to be dangerous)
+
+---
+
+### Tooling
+
+[RenderDoc](https://renderdoc.org/) to debug graphics/rendering issues.
+
+[rizin](https://rizin.re/) to assist in validating/checking the game's assembly.
+
+[pj64](https://www.pj64-emu.com/nightly-builds) to pull memory dumps for checks and comparisons. (Development builds are recommended since they provide more ways to debug/validate *even though it performs slower*)
 
 ---
 
