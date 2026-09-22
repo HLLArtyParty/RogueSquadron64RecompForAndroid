@@ -97,22 +97,24 @@ texrect_chunks.bin
 factor5_ucode_text.bin
 factor5_ucode_data.bin
 factor5_ucode_disasm.txt
+
 # Note: factor5_boot_text.bin is a build input (referenced by factor5_boot_rsp.toml)
 # and intentionally NOT ignored.
 mqfocus.txt
-*.log
+mqdiag_*.txt
+skills-lock.json
 .mcp.json
+*.log
+*.stackdump
+*.csv
 logs/
 dumps/
-*.stackdump
-mqdiag_*.txt
 /.agents
-skills-lock.json
 /wav
 /tools/__pycache__
 /tools/rename
-*.csv
 /tools/validate/__pycache__
+/tools/state/__pycache__
 /plans
 
 # native-demo example mod: separate-build DLL artifacts (built via mods/native-demo/CMakeLists.txt)
@@ -128,3 +130,7 @@ mods/menu-example/menu_example.dll
 mods/menu-example/menu_example.lib
 mods/menu-example/menu_example.exp
 mods/menu-example/menu_example.pdb
+
+# Generated from state_model.toml by tools/state/gen_state_table.py
+src/main/state_table.inl
+
