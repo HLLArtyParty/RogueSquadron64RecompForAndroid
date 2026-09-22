@@ -9,6 +9,37 @@ function dump(tag) {
     fs.writefile(OUT + "rdram_" + tag + ".bin", buf);
     console.log("[rs64_dump] wrote " + tag);
 }
+// State-matched goldens for tools/validate/state_diff.ps1. Mirrors the host game-state classifier
+// (src/main/game_state.cpp + state_model.toml): dump rdram_state_<id>.bin once per logical state so
+// the PJ64 golden lines up with the recomp's ROGUESQ_DUMP_RDRAM_ON_STATE dump.
+var stateDone = {};
+function inKseg0(p) { return (p >>> 0) >= 0x80000000 && (p >>> 0) < 0x80800000; }
+function classifyState() {
+    var objs = mem.u8[0x80130B17];                 // gMissionState+0x07 numMissionObjectives
+    var flags = mem.u32[0x80130B50] >>> 0;         // gGameSettings+0x10
+    if (objs != 0) return (flags & 0x20) ? "attract.demo" : "mission";
+    if (inKseg0(mem.u32[0x800B0934])) return "cinematic";   // cineStatePtr
+    if (inKseg0(mem.u32[0x800CE730])) {            // gCurrentMenuData
+        var id = mem.u8[0x800CE734];               // menu id
+        if (id == 1) { var sub = mem.u8[0x800CE626];
+            if (sub == 0) return "menu.account.enter_name";
+            if (sub == 1) return "menu.account.level_select";
+            if (sub == 2) return "menu.account.craft_select";
+            return "menu.account"; }
+        var nm = { 0: "menu.main", 2: "menu.options", 3: "menu.game_settings", 4: "menu.elite_rogues",
+                   5: "menu.controller_settings", 6: "menu.sound_settings", 7: "menu.passcodes",
+                   8: "menu.biographies", 10: "menu.media", 11: "menu.media.showroom" };
+        return nm[id] || "menu";
+    }
+    return "unknown";
+}
+function dumpState() {
+    var id = classifyState();
+    if (id == "unknown" || stateDone[id]) return;
+    stateDone[id] = true;
+    fs.writefile(OUT + "rdram_state_" + id + ".bin", mem.getblock(0x80000000, 0x800000));
+    console.log("[rs64_dump] state " + id + " -> rdram_state_" + id + ".bin");
+}
 console.log("[rs64_dump] start; fs.exists(OUT)=" + fs.exists(OUT));
 fs.writefile(OUT + "marker_abs.txt", "abs");
 console.log("[rs64_dump] abs marker written");
@@ -16,10 +47,11 @@ fs.writefile("rs64_marker_rel.txt", "rel");
 console.log("[rs64_dump] rel marker written");
 events.onexec(0x8003DFA0, function () { console.log("[rs64_dump] mainGameLoop hit"); });
 events.onexec(0x800A5D80, function () { cine++; if (cine == 1) dump("cine_iter1"); if (cine == 120) dump("cine_iter120"); });
-events.onexec(0x800C58A0, function () { menu++; var a1 = cpu.gpr.a1; console.log("[rs64_dump] menuOverlayInit #" + menu + " a1=" + a1); if (menu == 1) dump("menuinit1_screen" + a1); });
+events.onexec(0x800C58A0, function () { menu++; var a1 = cpu.gpr.a1; console.log("[rs64_dump] menuOverlayInit #" + menu + " a1=" + a1); if (menu == 1) dump("menuinit1_screen" + a1); dumpState(); });
 events.onexec(0x8008DA00, function () { dump("first_musyx_tick"); });
 var frame = 0;
 events.onexec(0x800AA658, function () {                 // tickCutsceneActionSlots: once per cinematic frame
+    dumpState();
     frame++;
     if (frame == 1) dump("cine_frame1");
     if (frame == 78) dump("cine_frame78");
@@ -44,6 +76,7 @@ events.onexec(0x80060900, function () { fxHit("coloredEffect"); });
 events.onexec(0x80060690, function () { fxHit("plainEffect"); });
 events.onexec(0x8007413C, function () { fxHit("explosionCtl"); });
 events.onexec(0x8000C07C, function () {
+    dumpState();   // per graphics frame: catches mission / attract states
     if (!laOn) return;
     laGf++;
     if (laGf % 200 == 0) console.log("[rs64_dump] gf " + laGf);

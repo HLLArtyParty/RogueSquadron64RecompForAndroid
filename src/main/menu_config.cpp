@@ -71,6 +71,18 @@ bool env_disabled(const char* name) {
     return v && *v && *v != '0';
 }
 
+// The custom front-end menu is suppressed when ROGUESQ_NO_MENU_BUTTONS is set, OR for the demo
+// boot target -- the custom menu displaces the original title's attract-idle path, so demo needs
+// the stock front end. See project_boot_target_nav_engine memory / nav_sequencer.cpp.
+bool menu_buttons_off() {
+    static const bool off = [] {
+        if (env_disabled("ROGUESQ_NO_MENU_BUTTONS")) return true;
+        const char* bt = recomp::os::getenv("ROGUESQ_BOOT_TARGET");
+        return bt && std::strncmp(bt, "demo", 4) == 0;
+    }();
+    return off;
+}
+
 // A game_settings toggle that `replace`s a known native toggle slot flips in place
 // via that slot's native sub-type-5 re-render (no reload). On by default; set
 // ROGUESQ_NO_TOGGLE_INPLACE to force the reload path.
@@ -761,7 +773,7 @@ extern "C" void rs64_menu_config_mark_dirty(void) {}
 extern "C" void rs64_menu_config_init(void) { (void)config(); }
 
 extern "C" void rs64_menu_install_main(uint8_t* rdram) {
-    static const bool off = env_disabled("ROGUESQ_NO_MENU_BUTTONS");
+    static const bool off = menu_buttons_off();
     if (off) return;
     for (int i = 0; i < MAX_ENTRIES; ++i) s_slot[i] = {};
 
@@ -794,7 +806,7 @@ extern "C" void rs64_menu_install_main(uint8_t* rdram) {
 }
 
 extern "C" void rs64_menu_confirm_main(uint8_t* rdram) {
-    static const bool off = env_disabled("ROGUESQ_NO_MENU_BUTTONS");
+    static const bool off = menu_buttons_off();
     if (off) return;
     uint8_t e = rd_b(rdram, GCMD_OFF + 0x94);   // highlighted entry
 

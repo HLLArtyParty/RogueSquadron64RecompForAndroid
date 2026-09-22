@@ -22,6 +22,8 @@
 #include "debug_logs.h"
 #include "upstream_compat.h"      // rs64_vi_driven, rs64_fb_guards_mask, g_active_overlay, g_last_swap_fb
 #include "hook_helpers.h"         // g_boot_pulse_start, g_current_scene, rs64_cine_iter_get, rs64_neutralize_matpool_cimg
+#include "game_state.h"           // rs64_state_poll, rs64_state_current_id
+#include "nav_sequencer.h"        // rs64_nav_set_target, rs64_nav_tick
 #include "rt64_render_context.h"  // create_render_context + submit_rdp_range (defined below)
 #include "../rsp/dpc_bridge.h"    // rs64_dpc_get_cumulative_histogram / _fullsyncs
 
@@ -395,6 +397,11 @@ public:
         drive_buffer_arbiter();
         drive_boot_target();
         poll_gamestate();
+        {
+            static bool s_nav_init = false;
+            if (!s_nav_init) { s_nav_init = true; rs64_nav_set_target(env_str("ROGUESQ_BOOT_TARGET")); }
+        }
+        rs64_nav_tick((uint8_t*)app->core.RDRAM);
         dump_rdram_if_armed();
         log_vi_state();
         maybe_persist_video_cfg();
@@ -832,7 +839,10 @@ private:
                 fprintf(stderr, "[boot-skip] menu handoff reached; START pulse off\n");
                 fflush(stderr);
             }
-            if (s_mode != BOOT_LEVEL) g_boot_pulse_start = (s_skip_done || g_active_overlay != 2) ? 0 : 1;
+            // All nav targets reach the front-end menu; pulse START through the intro handoff.
+            // (demo-immediate is blocked by the custom menu displacing the attract idle path;
+            // see plans/2026-09-22-boot-target-nav-engine-design.md.)
+            g_boot_pulse_start = (s_skip_done || g_active_overlay != 2) ? 0 : 1;
         }
 
         if (s_skip_demo >= 0 && s_skip_demo <= 5) {
@@ -844,23 +854,32 @@ private:
     // ROGUESQ_LOG_GAMESTATE=1: log engine globals (docs/game-architecture.md) on change and
     // every 512 presents. gateCtr vs cuts44 shows whether the cinematic timeline is advancing.
     void poll_gamestate() {
+        if (!app->core.RDRAM) return;
+        rs64_state_poll((const uint8_t*)app->core.RDRAM);   // every present: the nav sequencer needs
+                                                            // fresh state to catch fast menu screens
+        if ((vi_count_ & 63) != 0) return;
         static const bool s_on = env_on("ROGUESQ_LOG_GAMESTATE");
-        if (!s_on || !app->core.RDRAM || (vi_count_ & 63) != 0) return;
+        if (!s_on) return;
         struct Snap {
-            uint8_t level, craft, cineStage, u20, u21, u22, screen;
-            uint32_t cineState, cutscene;
+            uint8_t level, craft, cineStage, u20, u21, u22, screen, menuId, sub;
+            uint32_t cineState, cutscene, menuPtr;
+            int sceneId;
             bool operator==(const Snap& o) const {
                 return level == o.level && craft == o.craft && cineStage == o.cineStage &&
                        u20 == o.u20 && u21 == o.u21 && u22 == o.u22 && screen == o.screen &&
+                       menuId == o.menuId && menuPtr == o.menuPtr && sceneId == o.sceneId &&
+                       sub == o.sub &&
                        cineState == o.cineState && cutscene == o.cutscene;
             }
         };
         Snap s{};
+        s.sceneId = g_current_scene;
         s.level = rd8(0x130B70); s.craft = rd8(0x130B41);
         s.cineState = rd32(0x0B0934); s.cineStage = rd8(0x0B0938);
         s.cutscene = rd32(0x0B1904);
         s.u20 = rd8(0x130B60); s.u21 = rd8(0x130B61); s.u22 = rd8(0x130B62);
         s.screen = rd8(0x130B14);
+        s.menuId = rd8(0x0CE734); s.menuPtr = rd32(0x0CE730); s.sub = rd8(0x0CE626);
         const uint8_t b04 = rd8(0x130B44), b1f = rd8(0x130B5F), b25 = rd8(0x130B65);
         const uint32_t gateCtr = rd32(0x0B0B28);
         const bool cut_ok = s.cutscene >= 0x80000000u && s.cutscene < 0x80800000u;
@@ -871,8 +890,8 @@ private:
         const bool changed = !s_have_last || !(s == s_last);
         if (!changed && (vi_count_ & 511) != 0) return;
         fprintf(stderr,
-            "[gamestate vi=#%d] screen=%u level=%u craft=%u b04=%u b1f=%u b25=%u u20=%u u21=%u u22=%u cineState=0x%08X cineStage=%u cutscene=0x%08X gateCtr=%u cuts44=%u%s\n",
-            vi_count_, s.screen, s.level, s.craft, b04, b1f, b25, s.u20, s.u21, s.u22,
+            "[gamestate vi=#%d] state=%s scene=%d menuId=%u sub=%u menuPtr=0x%08X screen=%u level=%u craft=%u b04=%u b1f=%u b25=%u u20=%u u21=%u u22=%u cineState=0x%08X cineStage=%u cutscene=0x%08X gateCtr=%u cuts44=%u%s\n",
+            vi_count_, rs64_state_current_id(), g_current_scene, s.menuId, s.sub, s.menuPtr, s.screen, s.level, s.craft, b04, b1f, b25, s.u20, s.u21, s.u22,
             s.cineState, s.cineStage, s.cutscene, gateCtr, cuts44, changed ? " [CHANGED]" : "");
         if (cut_ok) {
             const uint32_t off = s.cutscene - 0x80000000u;
@@ -898,6 +917,47 @@ private:
     //   ROGUESQ_DUMP_RDRAM_ON_SCREEN=<n|menu[,settle]>  screenState == n, or menu overlay after the cinematic
     // Path: ROGUESQ_DUMP_RDRAM_PATH, default dumps/rdram_<tag>.bin.
     void dump_rdram_if_armed() {
+        // ROGUESQ_DUMP_RDRAM_ON_STATE=<id>[,<id>...]: multi-milestone dump keyed to the game-state
+        // classifier -- dumps dumps/rdram_state_<id>.bin the first present each listed state becomes
+        // current, ALL in one run (unlike the one-shot triggers below). Feeds tools/validate/state_diff.ps1.
+        {
+            static const char* s_on_state = env_str("ROGUESQ_DUMP_RDRAM_ON_STATE");
+            if (s_on_state && app->core.RDRAM) {
+                static char s_buf[256];
+                static const char* s_ids[16];
+                static bool s_iddone[16];
+                static int s_nids = -1;
+                if (s_nids < 0) {
+                    std::snprintf(s_buf, sizeof s_buf, "%s", s_on_state);
+                    s_nids = 0;
+                    for (char* p = s_buf; *p && s_nids < 16; ) {
+                        s_ids[s_nids] = p; s_iddone[s_nids] = false; ++s_nids;
+                        char* c = std::strchr(p, ',');
+                        if (!c) break;
+                        *c = 0; p = c + 1;
+                    }
+                }
+                const char* cur = rs64_state_current_id();
+                for (int i = 0; i < s_nids; ++i) {
+                    if (s_iddone[i] || std::strcmp(cur, s_ids[i]) != 0) continue;
+                    s_iddone[i] = true;
+                    char path[512];
+                    std::snprintf(path, sizeof path, "dumps/rdram_state_%s.bin", s_ids[i]);
+                    FILE* f = recomp::os::fopen(path, "wb");
+                    if (f) {
+                        static uint8_t sbuf[0x10000];
+                        for (uint32_t base = 0; base < 0x800000u; base += sizeof sbuf) {
+                            for (uint32_t j = 0; j < sizeof sbuf; ++j) sbuf[j] = app->core.RDRAM[(base + j) ^ 3];
+                            fwrite(sbuf, 1, sizeof sbuf, f);
+                        }
+                        fclose(f);
+                    }
+                    fprintf(stderr, "[rdram-dump] state=%s vi=#%d -> %s (%s)\n", s_ids[i], vi_count_, path, f ? "ok" : "OPEN FAILED");
+                    fflush(stderr);
+                }
+            }
+        }
+
         static const char* s_at_vi = env_str("ROGUESQ_DUMP_RDRAM_AT_VI");
         static const char* s_on_cine = env_str("ROGUESQ_DUMP_RDRAM_ON_CINE_ITER");
         static const char* s_on_stall = env_str("ROGUESQ_DUMP_RDRAM_ON_CINE_STALL");

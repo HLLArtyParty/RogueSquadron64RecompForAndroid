@@ -27,6 +27,7 @@ static unsigned g_rs64_audio_underruns = 0;   // dry-queue arrivals (see queue_s
 #include "main.h"                 // this file's own exports (fullscreen/quit hooks)
 #include "upstream_compat.h"      // rs64_vi_driven
 #include "hook_helpers.h"         // g_vi_tick, g_boot_pulse_start
+#include "nav_sequencer.h"        // rs64_nav_consume, rs64_nav_tick
 #include "rt64_render_context.h"  // recomp::create_render_context
 #include "../rsp/dpc_bridge.h"    // rs64_dpc_drain_histogram
 #include <mutex>
@@ -1120,6 +1121,90 @@ static bool fake_controller_enabled() {
     return s;
 }
 
+// ROGUESQ_INPUT_SEQ="name:holdMs:afterMs,..." — a scripted virtual-controller
+// timeline injected at get_n64_input (no window focus needed, unlike SendInput).
+// ROGUESQ_INPUT_DELAY=<ms> waits before the first step (default 12000, to clear boot).
+// Names: start a b z l r  dup ddown dleft dright  cup cdown cleft cright
+//        up down left right (analog stick)  wait (neutral hold).
+// Used for headless front-end navigation + state calibration. Default OFF.
+struct InputStep { uint16_t mask; float sx, sy; uint32_t hold, after; };
+
+static bool scripted_input(uint16_t* buttons, float* x, float* y) {
+    static int s_init = -1;
+    static std::vector<InputStep> s_steps;
+    static uint32_t s_delay = 12000;
+    static uint32_t s_t0 = 0;            // wall-clock at first eligible call
+    static bool s_done_logged = false;
+    if (s_init < 0) {
+        s_init = 0;
+        const char* seq = recomp::dbg::env_str("ROGUESQ_INPUT_SEQ");
+        if (seq && *seq) {
+            s_init = 1;
+            s_delay = (uint32_t)env_int("ROGUESQ_INPUT_DELAY", 12000);
+            auto tok = [](const std::string& n) -> InputStep {
+                InputStep s{0, 0.f, 0.f, 90, 400};
+                std::string name = n; size_t c1 = name.find(':');
+                std::string hold, after;
+                if (c1 != std::string::npos) {
+                    size_t c2 = name.find(':', c1 + 1);
+                    hold = name.substr(c1 + 1, (c2 == std::string::npos ? std::string::npos : c2 - c1 - 1));
+                    if (c2 != std::string::npos) after = name.substr(c2 + 1);
+                    name = name.substr(0, c1);
+                }
+                if (!hold.empty()) s.hold = (uint32_t)std::atoi(hold.c_str());
+                if (!after.empty()) s.after = (uint32_t)std::atoi(after.c_str());
+                if      (name == "start") s.mask = N64_START_BUTTON;
+                else if (name == "a")     s.mask = N64_A_BUTTON;
+                else if (name == "b")     s.mask = N64_B_BUTTON;
+                else if (name == "z")     s.mask = N64_Z_TRIG;
+                else if (name == "l")     s.mask = N64_L_TRIG;
+                else if (name == "r")     s.mask = N64_R_TRIG;
+                else if (name == "dup")   s.mask = N64_U_JPAD;
+                else if (name == "ddown") s.mask = N64_D_JPAD;
+                else if (name == "dleft") s.mask = N64_L_JPAD;
+                else if (name == "dright")s.mask = N64_R_JPAD;
+                else if (name == "cup")   s.mask = N64_U_CBUTTONS;
+                else if (name == "cdown") s.mask = N64_D_CBUTTONS;
+                else if (name == "cleft") s.mask = N64_L_CBUTTONS;
+                else if (name == "cright")s.mask = N64_R_CBUTTONS;
+                else if (name == "up")    s.sy = 1.0f;
+                else if (name == "down")  s.sy = -1.0f;
+                else if (name == "left")  s.sx = -1.0f;
+                else if (name == "right") s.sx = 1.0f;
+                // "wait" / unknown -> neutral hold
+                return s;
+            };
+            std::string all(seq), cur;
+            for (size_t i = 0; i <= all.size(); ++i) {
+                if (i == all.size() || all[i] == ',') { if (!cur.empty()) s_steps.push_back(tok(cur)); cur.clear(); }
+                else cur.push_back(all[i]);
+            }
+        }
+    }
+    if (s_init != 1) return false;
+
+    uint32_t now = SDL_GetTicks();
+    if (s_t0 == 0) s_t0 = now;
+    uint32_t elapsed = now - s_t0;
+    if (elapsed < s_delay) { *buttons = 0; *x = 0.f; *y = 0.f; return true; }
+    uint32_t t = elapsed - s_delay;
+    uint32_t acc = 0;
+    for (const InputStep& st : s_steps) {
+        uint32_t span = st.hold + st.after;
+        if (t < acc + span) {
+            bool holding = (t - acc) < st.hold;
+            *buttons = holding ? st.mask : 0;
+            *x = holding ? st.sx : 0.f;
+            *y = holding ? st.sy : 0.f;
+            return true;
+        }
+        acc += span;
+    }
+    if (!s_done_logged) { s_done_logged = true; fprintf(stderr, "[input-seq] sequence complete at t=%ums\n", elapsed); fflush(stderr); }
+    *buttons = 0; *x = 0.f; *y = 0.f;
+    return true;
+}
+
 // Requested by the custom main-menu QUIT entry (menuControllerInput hook).
 // Pushes SDL_QUIT so the event loop runs the graceful shutdown path.
 extern "C" void rs64_menu_request_quit(void) {
@@ -1274,6 +1359,16 @@ static bool get_n64_input(int controller_num, uint16_t* buttons, float* x, float
         return true;
     }
 
+    // Headless automation overrides resolved input and must run BEFORE resolve(): keyboard is
+    // enabled by default, so resolve() reports "active" even with no key pressed, which would
+    // otherwise skip the fake-controller branch and swallow injected input.
+    if (fake_controller_enabled()) {
+        uint16_t nb = 0; float nx = 0.f, ny = 0.f;
+        if (rs64_nav_consume(&nb, &nx, &ny)) { *buttons = nb; *x = nx; *y = ny; return true; }
+        uint16_t sb = 0; float sx = 0.f, sy = 0.f;
+        if (scripted_input(&sb, &sx, &sy)) { *buttons = sb; *x = sx; *y = sy; return true; }
+    }
+
     // Resolve keyboard + gamepad + mouse through the bindings profile.
     rs64::input::RawState st;
     st.keys = SDL_GetKeyboardState(&st.keys_len);
@@ -1307,6 +1402,7 @@ static bool get_n64_input(int controller_num, uint16_t* buttons, float* x, float
         // No keyboard and no gamepad: keep the fake-controller path so headless
         // runs still clear the "NO CONTROLLER" gate.
         if (fake_controller_enabled()) {
+            // nav/scripted injection already handled above (before resolve).
             static int s_auto = -1;
             if (s_auto < 0) s_auto = env_int("ROGUESQ_AUTO_START", 0);
             uint16_t fb = 0;
@@ -1544,7 +1640,11 @@ ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::
     // On non-Windows RT64 renders through Vulkan and needs the window created
     // with SDL_WINDOW_VULKAN so SDL_Vulkan_CreateSurface can bind to it. On
     // Windows the backend is D3D12 via the HWND, so the flag is omitted.
-    Uint32 window_flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN;
+    // ROGUESQ_HIDE_WINDOW=1: create the window hidden so headless runs are a true background
+    // process (no visible window). The HWND/surface is still valid, so RT64 keeps rendering and
+    // presenting and the VI-paced loop proceeds; only on-screen display + window screenshots are lost.
+    const bool hide_window = env_on("ROGUESQ_HIDE_WINDOW");
+    Uint32 window_flags = SDL_WINDOW_RESIZABLE | (hide_window ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN);
 #ifndef _WIN32
     window_flags |= SDL_WINDOW_VULKAN;
 #endif
@@ -1863,6 +1963,7 @@ static const CliFlag kCliFlags[] = {
     {"render-song",      "ROGUESQ_RENDER_SONG",      CliFlag::Value, "",  "",  "force a specific song key (0 = N64-logo music)"},
     {"fake-controller",  "ROGUESQ_FAKE_CONTROLLER",  CliFlag::Bool,  "1", "0", "fake a connected controller (headless runs)"},
     {"auto-start",       "ROGUESQ_AUTO_START",       CliFlag::Value, "",  "",  "pulse START after <ms> (headless runs)"},
+    {"hide-window",      "ROGUESQ_HIDE_WINDOW",      CliFlag::Bool,  "1", "0", "create the window hidden (background process; no display/screenshots)"},
     {"boot-target",      "ROGUESQ_BOOT_TARGET",      CliFlag::Value, "",  "",  "skip the intro to a target: menu | demo:N (N=0-5)"},
 };
 

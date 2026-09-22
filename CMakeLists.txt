@@ -296,8 +296,25 @@ set_source_files_properties(${FACTOR5_UCODE_C} ${FACTOR5_BOOT_C} ${MUSYX_AUDIO_C
     LANGUAGE CXX
     COMPILE_OPTIONS "-msse4.1;${RSP_UCODE_FORCE_INCLUDE}")
 
+# Generate the game-state table header from the canonical descriptor (state_model.toml).
+# See plans/2026-09-22-game-state-model-design.md.
+set(STATE_TABLE_INL ${CMAKE_SOURCE_DIR}/src/main/state_table.inl)
+if (Python3_Interpreter_FOUND)
+    add_custom_command(
+        OUTPUT ${STATE_TABLE_INL}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/state/gen_state_table.py
+                ${CMAKE_SOURCE_DIR}/state_model.toml ${STATE_TABLE_INL}
+        DEPENDS ${CMAKE_SOURCE_DIR}/state_model.toml
+                ${CMAKE_SOURCE_DIR}/tools/state/gen_state_table.py
+                ${CMAKE_SOURCE_DIR}/tools/state/state_model.py
+        COMMENT "Generating state_table.inl from state_model.toml")
+    add_custom_target(gen_state_table DEPENDS ${STATE_TABLE_INL})
+endif()
+
 add_executable(RogueSquadron64Recomp
     ${CMAKE_SOURCE_DIR}/src/main/main.cpp
+    ${CMAKE_SOURCE_DIR}/src/main/game_state.cpp
+    ${CMAKE_SOURCE_DIR}/src/main/nav_sequencer.cpp
     ${CMAKE_SOURCE_DIR}/src/main/input_bindings.cpp
     ${CMAKE_SOURCE_DIR}/src/main/video_config.cpp
     ${CMAKE_SOURCE_DIR}/src/main/menu_config.cpp
@@ -312,6 +329,9 @@ add_executable(RogueSquadron64Recomp
     ${MUSYX_AUDIO_C}
     $<$<PLATFORM_ID:Windows>:${CMAKE_SOURCE_DIR}/src/main/app.rc>
 )
+if (TARGET gen_state_table)
+    add_dependencies(RogueSquadron64Recomp gen_state_table)
+endif()
 
 target_include_directories(RogueSquadron64Recomp PRIVATE
     ${CMAKE_SOURCE_DIR}/include
@@ -365,6 +385,18 @@ target_include_directories(video_config_test PRIVATE
     ${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib
 )
 
+# Standalone unit test for the nav-sequencer target parser.
+add_executable(nav_target_test EXCLUDE_FROM_ALL
+    ${CMAKE_SOURCE_DIR}/tests/nav_target_test.cpp
+    ${CMAKE_SOURCE_DIR}/src/main/nav_sequencer.cpp
+    ${CMAKE_SOURCE_DIR}/src/main/game_state.cpp
+)
+set_target_properties(nav_target_test PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+target_include_directories(nav_target_test PRIVATE ${CMAKE_SOURCE_DIR}/src/main)
+if (TARGET gen_state_table)
+    add_dependencies(nav_target_test gen_state_table)
+endif()
+
 # ---- SDL2 (Windows: fetch; Linux/Mac: find_package) ----
 if (WIN32)
     include(FetchContent)
@@ -391,6 +423,10 @@ if (WIN32)
         LINK_FLAGS_RELWITHDEBINFO "/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup"
     )
     target_link_libraries(RogueSquadron64Recomp PRIVATE SDL2 Winmm.lib)
+    # We define SDL_MAIN_HANDLED and provide our own main() under /SUBSYSTEM:CONSOLE, so
+    # SDL2main (pulled in transitively) must not be linked: its SDL_windows_main.obj
+    # references SDL_main, which we intentionally do not provide.
+    target_link_options(RogueSquadron64Recomp PRIVATE /NODEFAULTLIB:SDL2main.lib)
 elseif (APPLE)
     find_package(SDL2 REQUIRED)
     find_package(Threads REQUIRED)
