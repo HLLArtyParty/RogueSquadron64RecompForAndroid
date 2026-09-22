@@ -32,9 +32,7 @@
 // Phase 1b.
 
 namespace recomp { void* alloc(uint8_t* rdram, size_t size); }
-extern "C" void rs64_menu_request_quit(void);   // main.cpp
-extern "C" void rs64_toggle_fullscreen(void);   // main.cpp
-extern "C" int  rs64_get_fullscreen(void);      // main.cpp
+#include "main.h"   // rs64_menu_request_quit, rs64_toggle_fullscreen, rs64_get_fullscreen
 
 namespace {
 
@@ -498,7 +496,10 @@ bool anchor_order(const std::vector<Item>& items, uint8_t menu_id,
                   const std::string& name, double& out) {
     const auto* aliases = native_aliases(menu_id);
     const NativeAlias* na = nullptr;
-    if (aliases) { auto it = aliases->find(name); if (it != aliases->end()) na = &it->second; }
+    if (aliases) {
+        auto it = aliases->find(name);
+        if (it != aliases->end()) na = &it->second;
+    }
     for (const auto& it : items) {
         if (it.is_native && na && alias_matches(it.slot, *na)) { out = it.order; return true; }
         if (!it.is_native && it.binding.key == name)           { out = it.order; return true; }

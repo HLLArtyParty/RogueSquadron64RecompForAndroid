@@ -19,22 +19,16 @@
 #include "ultramodern/ultramodern.hpp"
 #include "ultramodern/renderer_context.hpp"
 #include "debug_logs.h"
+#include "upstream_compat.h"      // rs64_vi_driven, rs64_fb_guards_mask, g_active_overlay, g_last_swap_fb
+#include "hook_helpers.h"         // g_boot_pulse_start, g_current_scene, rs64_cine_iter_get, rs64_neutralize_matpool_cimg
+#include "rt64_render_context.h"  // create_render_context + submit_rdp_range (defined below)
+#include "../rsp/dpc_bridge.h"    // rs64_dpc_get_cumulative_histogram / _fullsyncs
 
 using recomp::dbg::env_str;
 using recomp::dbg::env_on;
 using recomp::dbg::env_int;
 using recomp::dbg::env_u32;
 
-// src/main/upstream_compat.cpp
-extern "C" int rs64_fb_guards_mask(void);
-extern "C" int rs64_vi_driven(void);
-extern "C" volatile unsigned g_last_swap_fb;         // last osViSwapBuffer target
-extern "C" volatile int g_active_overlay;            // 0=gameplay 1=menu 2=cinematic
-// src/main/hook_helpers.cpp
-extern "C" void rs64_neutralize_matpool_cimg(uint8_t*, uint32_t dl_phys);
-extern "C" unsigned long long rs64_cine_iter_get(void);
-extern "C" volatile int g_boot_pulse_start;          // get_n64_input injects START while set
-extern "C" volatile int g_current_scene;
 // src/main/main.cpp
 extern void print_stack_with_symbols(void** frames, unsigned short count);
 // ultramodern events.cpp
@@ -43,23 +37,39 @@ extern "C" uint8_t* g_rs64_parse_rdram;             // RDRAM snapshot for the cu
 extern "C" volatile unsigned g_most_drawn_fb;        // most-drawn color image and its width
 extern "C" volatile unsigned g_most_drawn_fb_width;
 extern "C" volatile unsigned long long g_most_drawn_fb_ms;
-// src/rsp/dpc_bridge.cpp
-extern "C" void rs64_dpc_get_cumulative_histogram(uint32_t out[64]);
-extern "C" uint32_t rs64_dpc_get_cumulative_fullsyncs();
 // Defined below
 extern "C" void rs64_sanitize_fb_registry(void);
 
 // Last task's processDisplayLists time, reported by the ROGUESQ_LOG_GFX_TASK line.
-extern "C" volatile long long g_rs64_pdl_us; volatile long long g_rs64_pdl_us = 0;
+extern "C" volatile long long g_rs64_pdl_us;
+volatile long long g_rs64_pdl_us = 0;
 // Running total of processDisplayLists CPU time (us) across all tasks; ROGUESQ_LOG_FRAME_PROFILE
 // samples it per present to attribute frame time to DL-walk/submit vs present vs sim.
-extern "C" volatile long long g_rs64_pdl_us_total; volatile long long g_rs64_pdl_us_total = 0;
-extern "C" volatile long long g_rs64_pdl_task_total; volatile long long g_rs64_pdl_task_total = 0;
+extern "C" volatile long long g_rs64_pdl_us_total;
+volatile long long g_rs64_pdl_us_total = 0;
+extern "C" volatile long long g_rs64_pdl_task_total;
+volatile long long g_rs64_pdl_task_total = 0;
 // Snapshot memcpy time (us), set on the game thread in events.cpp take_rdram_snapshot.
 extern "C" volatile long long g_rs64_snap_us;
 
 // Set on construction, cleared on shutdown; the LLE DPC bridge submits through it.
 static std::atomic<RT64::Application*> g_rt64_app{nullptr};
+
+// True while RT64's F1 developer inspector (ImGui) is up. The inspector is
+// created/destroyed on the window thread inside RT64's SDL event filter, which
+// runs during the same SDL_PumpEvents as update_gfx's caller -- so this read is
+// same-thread with the writer and needs no lock. Used to release mouse-steering
+// capture so the cursor is free for the inspector.
+extern "C" int rs64_rt64_inspector_open(void) {
+    RT64::Application* app = g_rt64_app.load(std::memory_order_relaxed);
+    if (!app || !app->presentQueue) return 0;
+    // Only the developer-mode F1 inspector counts. Outside developer mode the
+    // inspector object still exists to host our own ImGui render hook (the
+    // Controls window), but the F1 developer UI can't be opened, so that object
+    // being non-null must not suppress capture.
+    if (!app->userConfig.developerMode) return 0;
+    return app->presentQueue->inspector != nullptr ? 1 : 0;
+}
 
 #ifdef _WIN32
 // Symbolizes on the faulting thread inside the filter; capped to bound loader-lock exposure.
@@ -275,7 +285,8 @@ public:
                     app->userConfig.refreshRate = UC::RefreshRate::Original;
                     fprintf(stderr, "[RT64] frame interpolation OFF\n");
                 } else {
-                    int hz = env_int("ROGUESQ_RT_INTERP"); if (hz < 20) hz = 60;
+                    int hz = env_int("ROGUESQ_RT_INTERP");
+                    if (hz < 20) hz = 60;
                     app->userConfig.refreshRate = UC::RefreshRate::Manual;
                     app->userConfig.refreshRateTarget = hz;
                     fprintf(stderr, "[RT64] frame interpolation ON (Manual %d Hz)\n", hz);

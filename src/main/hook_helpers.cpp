@@ -16,6 +16,8 @@
 
 #include "recomp.h"
 #include "debug_logs.h"
+#include "hook_helpers.h"      // declares the exports defined below (g_vi_tick, rs64_cine_iter_get, …)
+#include "upstream_compat.h"   // rs64_vi_driven, rs64_fb_guards_mask
 
 using recomp::dbg::env_str;
 using recomp::dbg::env_on;
@@ -29,8 +31,6 @@ using recomp::dbg::env_int;
 #define RS64_DIAG 1
 #endif
 
-extern "C" int rs64_vi_driven(void);                                   // upstream_compat.cpp
-extern "C" int rs64_fb_guards_mask(void);                              // upstream_compat.cpp
 
 // ---- Boot target ----
 

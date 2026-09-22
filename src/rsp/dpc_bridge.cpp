@@ -22,13 +22,10 @@
 #include "librecomp/rsp.hpp"
 #include "ultramodern/events.hpp"
 #include "dpc_bridge.h"
+#include "../main/debug_logs.h"
+#include "../main/rt64_render_context.h"   // ultramodern::submit_rdp_range (fork addition)
 
-// upstream librecomp doesn't expose `ultramodern::submit_rdp_range` (a fork
-// addition; defined in src/main/rt64_render_context.cpp) in any header, so
-// forward-declare the one function the bridge needs.
-namespace ultramodern {
-    void submit_rdp_range(uint32_t lo_phys, uint32_t hi_phys);
-}
+using recomp::dbg::env_on;
 
 // ---- DPC MMIO register state (read/written by the recompiled ucode) --------
 uint32_t g_rsp_dpc_start = 0;
@@ -107,10 +104,7 @@ inline uint32_t be_w(uint8_t* rdram, int64_t mips, int off) {
 // residual "less saturated reds" gap. Skips the engine-glow outlier so orange
 // flames don't go white. Writes the forwarded RDRAM bytes in place.
 void dpc_apply_prim_override(uint8_t* rdram, uint32_t submit_lo) {
-    static const bool prim_full = []{
-        const char *e = recomp::os::getenv("ROGUESQ_PRIM_FF");
-        return e && *e && *e != '0';
-    }();
+    static const bool prim_full = env_on("ROGUESQ_PRIM_FF");
     if (!prim_full) return;
     int64_t mips = (int64_t)(int32_t)(submit_lo + 0x80000000);
     uint32_t w1 = be_w(rdram, mips, 4);
@@ -148,14 +142,8 @@ void dpc_track_fb_ownership(uint8_t* rdram, uint32_t submit_lo) {
 //                                    those, so let them through here.
 // HIGH + LOW gated by ROGUESQ_SUPPRESS_OOB_CIMG; MID gated by ROGUESQ_DROP_MID_CIMG.
 bool dpc_suppress_oob_cimg(uint8_t* rdram, uint32_t submit_lo, uint32_t submit_hi) {
-    static const bool s_suppress = []{
-        const char* v = recomp::os::getenv("ROGUESQ_SUPPRESS_OOB_CIMG");
-        return v && *v && *v != '0';
-    }();
-    static const bool s_drop_mid = []{
-        const char* v = recomp::os::getenv("ROGUESQ_DROP_MID_CIMG");
-        return v && *v && *v != '0';
-    }();
+    static const bool s_suppress = env_on("ROGUESQ_SUPPRESS_OOB_CIMG");
+    static const bool s_drop_mid = env_on("ROGUESQ_DROP_MID_CIMG");
     if ((submit_hi - submit_lo) != 8) return false;
     int64_t mp = (int64_t)(int32_t)(submit_lo + 0x80000000);
     if ((uint8_t)MEM_B(0, mp) != 0xFF) return false;
@@ -256,8 +244,7 @@ extern "C" void rsp_task_log_and_reset(uint32_t iters, uint32_t data_size, uint3
 // path, ~5 fps cinematic) for A/B comparison.
 extern "C" void rsp_force_fullsync() {
     static const bool disabled = []{
-        const char *e = recomp::os::getenv("ROGUESQ_NO_SYNTH_FULLSYNC");
-        bool d = (e != nullptr && *e != '\0' && *e != '0');
+        bool d = env_on("ROGUESQ_NO_SYNTH_FULLSYNC");
         if (d) { fprintf(stderr, "[dpc] synthetic FULL_SYNC injection DISABLED via env\n"); fflush(stderr); }
         return d;
     }();

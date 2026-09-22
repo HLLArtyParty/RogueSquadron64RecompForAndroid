@@ -79,7 +79,9 @@ float source_value(const Source& s, const RawState& st) {
             if (!st.mouse_active) return 0.0f;
             float d = (s.code == 0) ? st.mouse_dx : st.mouse_dy;
             d *= (float)s.dir;                 // select requested half
-            return d > 0.0f ? std::min(1.0f, d) : 0.0f;
+            if (d <= 0.0f) return 0.0f;
+            float m = std::min(1.0f, d);
+            return st.mouse_curve != 1.0f ? std::pow(m, st.mouse_curve) : m;
         }
         default:
             return 0.0f;
@@ -118,7 +120,7 @@ Bindings default_bindings() {
     add(Target::DpadDown, key(SDL_SCANCODE_F2));    // standard view
     add(Target::DpadRight,key(SDL_SCANCODE_F3));    // close view
     add(Target::LTrig,    key(SDL_SCANCODE_F4));    // switch view
-    add(Target::CUp,      key(SDL_SCANCODE_F8));    // look around (F5 = profiler HUD host hotkey)
+    add(Target::CUp,      key(SDL_SCANCODE_Q));     // look around (F5 = profiler HUD host hotkey)
     add(Target::DpadLeft, key(SDL_SCANCODE_Z));     // drop camera
 
     // --- Mouse (flight steering) ---
@@ -159,6 +161,7 @@ bool resolve(const Bindings& b, const RawState& s, uint16_t* buttons, float* x, 
     if (b.mouse_invert_y) st.mouse_dy = -st.mouse_dy;
     st.mouse_dx *= b.mouse_sensitivity;
     st.mouse_dy *= b.mouse_sensitivity;
+    st.mouse_curve = b.mouse_curve;
 
     uint16_t btn = 0;
     float defl[(int)Target::Count] = {0};
@@ -315,6 +318,8 @@ bool load_bindings(Bindings& b, const std::string& path) {
     if (j.contains("mouse") && j["mouse"].is_object()) {
         const json& m = j["mouse"];
         b.mouse_sensitivity = m.value("sensitivity", b.mouse_sensitivity);
+        b.mouse_smoothing   = m.value("smoothing", b.mouse_smoothing);
+        b.mouse_curve       = m.value("curve", b.mouse_curve);
         b.mouse_invert_x    = m.value("invert_x", b.mouse_invert_x);
         b.mouse_invert_y    = m.value("invert_y", b.mouse_invert_y);
     }
@@ -337,6 +342,7 @@ bool load_bindings(Bindings& b, const std::string& path) {
 bool save_bindings(const Bindings& b, const std::string& path) {
     json j;
     j["mouse"] = { {"sensitivity", b.mouse_sensitivity},
+                   {"smoothing", b.mouse_smoothing}, {"curve", b.mouse_curve},
                    {"invert_x", b.mouse_invert_x}, {"invert_y", b.mouse_invert_y} };
     j["keyboard_enabled"] = b.keyboard_enabled;
     json binds = json::object();

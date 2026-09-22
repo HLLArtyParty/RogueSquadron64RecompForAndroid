@@ -76,9 +76,17 @@ if (MSVC)
     target_compile_options(RecompiledFuncs PRIVATE
         -Wno-implicit-function-declaration
         -Wno-error=implicit-function-declaration
-        # clang-cl: the recompiler emits scratch locals (hi/lo/result/c1cs) that
-        # many generated functions never use. /wd4101 only covers MSVC C4101.
-        -Wno-unused-variable)
+        # clang-cl: the recompiler emits scratch locals (hi/lo/result/c1cs) and
+        # goto labels that many generated functions never use. /wd4101 only
+        # covers MSVC C4101; clang needs -Wno-unused-variable for unread locals,
+        # -Wno-unused-but-set-variable for ones only assigned (hi/lo/result), and
+        # -Wno-unused-label for the L_ labels emitted per basic block.
+        -Wno-unused-variable
+        -Wno-unused-but-set-variable
+        -Wno-unused-label)
+    # Generated probes call getenv/atoi. Opt out of the secure-CRT deprecation
+    # specifically (keeps -Wdeprecated-declarations live for real deprecations).
+    target_compile_definitions(RecompiledFuncs PRIVATE _CRT_SECURE_NO_WARNINGS)
     # Force-include our MEM_WU macro header (fills the unsigned-word gap in
     # upstream recomp.h without modifying it). See include/rsp_dpc_macros.h.
     target_compile_options(RecompiledFuncs PRIVATE
@@ -181,7 +189,14 @@ if (EXISTS "${MIPS_GCC}" AND EXISTS "${N64RECOMP_EXE}" AND PATCHES_MAKE_EXE)
     if (MSVC)
         target_compile_options(PatchesLib PRIVATE /wd4101 /wd4133
             -Wno-implicit-function-declaration
-            -Wno-error=implicit-function-declaration)
+            -Wno-error=implicit-function-declaration
+            # clang-cl: same generated-code noise as RecompiledFuncs. /wd4101 is
+            # MSVC-only; clang needs these three for the scratch locals, the
+            # set-but-unused hi/lo/result, and the per-block L_ labels.
+            -Wno-unused-variable
+            -Wno-unused-but-set-variable
+            -Wno-unused-label)
+        target_compile_definitions(PatchesLib PRIVATE _CRT_SECURE_NO_WARNINGS)
     else()
         target_compile_options(PatchesLib PRIVATE
             -fno-strict-aliasing -Wno-unused-variable -Wno-implicit-function-declaration)

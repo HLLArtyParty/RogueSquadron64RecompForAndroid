@@ -111,7 +111,9 @@ baseline is unchanged unless set.
 
 Keyboard, mouse, and gamepad bindings load from `roguesq_input.json` next to the
 exe (written with defaults on first run). Rebind in-app via **F1 then F6**
-(the Controls window). Backtick toggles mouse-steering capture.
+(the Controls window). Mouse-steering capture is automatic while the window is
+focused (released on defocus, when the Controls window is open, or when the F1
+inspector is up).
 
 | Env Var | Default | Effect |
 |---|---|---|

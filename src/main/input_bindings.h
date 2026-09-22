@@ -37,7 +37,9 @@ struct Source {
 
 struct Bindings {
     std::vector<Source> targets[(int)Target::Count];
-    float mouse_sensitivity = 0.06f;  // relative-pixel -> stick deflection
+    float mouse_sensitivity = 0.05f;  // relative-pixel -> stick deflection
+    float mouse_smoothing   = 0.3f;   // 0 = raw per-frame delta, higher = softer onset/recenter (time constant, ~ms/100)
+    float mouse_curve       = 1.0f;   // response exponent on [0,1] deflection; >1 eases small movements
     bool  mouse_invert_x    = false;
     bool  mouse_invert_y    = false;
     bool  keyboard_enabled  = true;   // report a controller and read the keyboard
@@ -48,8 +50,9 @@ struct RawState {
     const uint8_t*          keys         = nullptr;  // SDL_GetKeyboardState array (by scancode)
     int                     keys_len     = 0;
     _SDL_GameController*     pad          = nullptr;  // null if no gamepad
-    float                   mouse_dx     = 0.0f;      // relative motion this frame
+    float                   mouse_dx     = 0.0f;      // relative motion this frame (already smoothed by caller)
     float                   mouse_dy     = 0.0f;
+    float                   mouse_curve  = 1.0f;       // response exponent applied to mouse-axis deflection
     uint32_t                mouse_buttons= 0;          // SDL_GetMouseState button mask
     bool                    mouse_active = false;      // relative capture engaged
 };

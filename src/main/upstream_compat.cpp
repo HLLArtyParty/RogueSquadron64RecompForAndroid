@@ -24,6 +24,7 @@
 #include "librecomp/overlays.hpp"
 #include "ultramodern/ultramodern.hpp"
 #include "debug_logs.h"
+#include "upstream_compat.h"   // declares the exports defined below (rs64_vi_driven, g_active_overlay, …)
 
 using recomp::dbg::env_str;
 using recomp::dbg::env_on;
@@ -414,7 +415,8 @@ static void rs64_check_chunk_freelist(uint8_t* rdram) {
         prev = node; node = rw(off); ++steps;
     }
     if (steps >= 8192) why = "list longer than 8192 (cycle)";
-    { static int s_n = 0; if ((++s_n & 15) == 1) { fprintf(stderr, "[chunklist] task %d free=%d\n", s_n, steps); fflush(stderr); } }
+    { static int s_n = 0;
+      if ((++s_n & 15) == 1) { fprintf(stderr, "[chunklist] task %d free=%d\n", s_n, steps); fflush(stderr); } }
     if (!why) return;
     s_dumped = true;
     fprintf(stderr, "[chunklist] CORRUPT at task start: %s: prev=0x%08X bad=0x%08X steps=%d\n", why, prev, node, steps);

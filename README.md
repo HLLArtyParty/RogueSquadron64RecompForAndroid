@@ -162,9 +162,11 @@ default **Luke** controller setting; the other presets in Options rearrange them
 | Menu confirm / back | Enter / Backspace | A / B | A / X |
 | Pause | Esc | Start | Start |
 
-**Mouse flight steering:** press the backtick key (`` ` ``) to toggle mouse
-capture — mouse motion then steers the craft, left click fires blasters, right
-click fires the secondary weapon. `Esc` releases capture (and pauses).
+**Mouse flight steering:** mouse capture is automatic while the game window is
+focused — mouse motion steers the craft, left click fires blasters, right click
+fires the secondary weapon. Capture releases when the window loses focus, when
+the controls window (F6) is open, or when RT64's F1 inspector is up, so the
+cursor is free for other windows.
 
 In Debug builds F1/F3/F4 also toggle RT64 developer tools.
 
@@ -192,9 +194,8 @@ Issues:
 - Text and background during the Credit sequence renders incorrectly, with it clipping letters. The background has some slight visual artifacts as well. (Happens after completing the game, NOT when the 'CREDITS' passcode is entered. Meaning that the issue probably stems from the ending cutscene that plays prior to the credits)
 
 - Some CPU performance hitching and slow down (~20fps) in spots (although not as bad as the real n64 game)
-- Random crashes after long play session on Debug builds which is from memory filling up via debug variables/maps/arrays. (Needs **serious** cleanup)
 - Cutscenes having screen sizes of varying widths which could genuinely be an issue with the game itself.
-- Random sliver/line of pixel garbage flickering on the far right of the frame during cutscenes or certain menus like the hangar or credits.
+- Some slight graphical glitches in spots like how some cutscenes display the edge of the terrain as it renders when the fog should be covering it.
 
 - Frame interpolation *can be enabled* **BUT** it causes visual glitches due to how objects are ID'd. (The biggest pain point on this is the terrain which generates/changes on the fly causing the whole terrain to visually stutter) The performance hitches also causes frame stutter when interpolation is enabled.
 
