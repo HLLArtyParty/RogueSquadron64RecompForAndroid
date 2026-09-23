@@ -8,6 +8,9 @@
 #include <vector>
 #include <filesystem>
 #include <fstream>
+#if defined(__ANDROID__)
+#include <android/native_window.h>
+#endif
 #include "SDL.h"
 #include "SDL_syswm.h"
 #include "common/rt64_user_configuration.h"
@@ -58,6 +61,25 @@ extern "C" volatile long long g_rs64_snap_us;
 
 // Set on construction, cleared on shutdown; the LLE DPC bridge submits through it.
 static std::atomic<RT64::Application*> g_rt64_app{nullptr};
+
+#if defined(__ANDROID__)
+namespace {
+    std::atomic<void*> pending_resume_window{nullptr};
+}
+
+namespace rs64_android {
+void publish_resume_window(void* window) {
+    ANativeWindow* nativeWindow = static_cast<ANativeWindow*>(window);
+    if (nativeWindow != nullptr) {
+        ANativeWindow_acquire(nativeWindow);
+    }
+    void* old = pending_resume_window.exchange(window, std::memory_order_acq_rel);
+    if (old != nullptr) {
+        ANativeWindow_release(static_cast<ANativeWindow*>(old));
+    }
+}
+}
+#endif
 
 // True while RT64's F1 developer inspector (ImGui) is up. The inspector is
 // created/destroyed on the window thread inside RT64's SDL event filter, which
@@ -310,6 +332,19 @@ public:
             }
         }
 
+#if defined(__ANDROID__)
+        // Donor-proven Wave Race Android display defaults. Force both the game
+        // viewport and external/HUD presentation to remain 16:9 across scene
+        // transitions, overriding a desktop config cached by an earlier build.
+        app->userConfig.graphicsAPI = UC::GraphicsAPI::Vulkan;
+        app->userConfig.aspectRatio = UC::AspectRatio::Expand;
+        app->userConfig.extAspectRatio = UC::AspectRatio::Manual;
+        app->userConfig.extAspectTarget = 16.0 / 9.0;
+        app->userConfig.refreshRate = UC::RefreshRate::Display;
+        app->userConfig.displayBuffering = UC::DisplayBuffering::Triple;
+        fprintf(stderr, "[RT64] Android display defaults: Vulkan, expand, HUD 16:9, display refresh\n");
+#endif
+
         // PresentEarly (default on): the cinematic stays on one VI fb address, so RT64's
         // updateScreen never sees a VI change and would never present. ROGUESQ_HLE_PRESENT_EARLY=0 opts out.
         if (env_on("ROGUESQ_HLE_PRESENT_EARLY", true)) {
@@ -408,6 +443,18 @@ public:
 
     void update_screen() override {
         if (!app) return;
+#if defined(__ANDROID__)
+        if (void* window = pending_resume_window.exchange(nullptr, std::memory_order_acq_rel)) {
+            if (app->swapChain != nullptr) {
+                // Ownership of the acquired reference transfers into Plume's
+                // pendingRenderWindow slot.
+                app->swapChain->setRenderWindow(static_cast<ANativeWindow*>(window));
+            }
+            else {
+                ANativeWindow_release(static_cast<ANativeWindow*>(window));
+            }
+        }
+#endif
         ++vi_count_;
         apply_vi_overrides();
         drive_buffer_arbiter();

@@ -108,6 +108,73 @@ def test_android_arm64_and_storage_guards() -> None:
         "defined(__ANDROID__)",
     )
     require(
+        "src/main/main.cpp",
+        "SDL_NumJoysticks()",
+        "SDL_IsGameController",
+        "SDL_GameControllerOpen",
+    )
+    require(
+        "src/main/rt64_render_context.cpp",
+        "#if defined(__ANDROID__)",
+        "app->userConfig.aspectRatio = UC::AspectRatio::Expand;",
+        "app->userConfig.extAspectRatio = UC::AspectRatio::Manual;",
+        "app->userConfig.extAspectTarget = 16.0 / 9.0;",
+    )
+    require(
+        "android/app/src/main/java/com/hllartyparty/roguesquadron64recomp/GameActivity.java",
+        "onWindowFocusChanged",
+        "SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION",
+        "LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES",
+    )
+    require(
+        "src/main/main.cpp",
+        "SDL_AddEventWatch(android_lifecycle_event_watch",
+        "SDL_APP_WILLENTERBACKGROUND",
+        "g_android_resume_pending.store(true",
+        "try_resume_android_surface();",
+        "ultramodern::set_app_paused(false)",
+    )
+    main_source = (ROOT / "src/main/main.cpp").read_text(encoding="utf-8")
+    foreground_case = main_source.index("case SDL_APP_DIDENTERFOREGROUND:")
+    foreground_end = main_source.index("default:", foreground_case)
+    assert "SDL_GetWindowWMInfo" not in main_source[foreground_case:foreground_end], (
+        "foreground callback must request resume, not perform the donor's one-shot window lookup"
+    )
+    pump = main_source.index("SDL_PumpEvents();")
+    assert main_source.index("try_resume_android_surface();", pump) > pump, (
+        "surface resume must retry from the always-running graphics loop after pumping SDL"
+    )
+    require(
+        "lib/N64ModernRuntime/ultramodern/include/ultramodern/ultramodern.hpp",
+        "void set_app_paused(bool paused);",
+        "void set_exited_and_wake();",
+    )
+    require(
+        "lib/N64ModernRuntime/ultramodern/src/events.cpp",
+        "std::condition_variable app_pause_cv",
+        "wait_while_app_paused()",
+    )
+    require(
+        "src/main/rt64_render_context.cpp",
+        "pending_resume_window",
+        "publish_resume_window",
+        "setRenderWindow",
+    )
+    require(
+        "lib/rt64/src/contrib/plume/plume_render_interface.h",
+        "virtual void setRenderWindow(RenderWindow window)",
+    )
+    require(
+        "lib/rt64/src/contrib/plume/plume_vulkan.cpp",
+        "ANativeWindow_acquire",
+        "bool VulkanSwapChain::recreateSurface()",
+        "pendingRenderWindow.exchange",
+    )
+    require(
+        "lib/rt64/src/hle/rt64_present_queue.cpp",
+        "ext.swapChain->isEmpty() || !swapChainValid",
+    )
+    require(
         "src/main/rt64_render_context.cpp",
         "SDL_GetWindowWMInfo",
         "wm_info.info.android.window",

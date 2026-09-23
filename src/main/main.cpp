@@ -49,6 +49,10 @@ using recomp::dbg::env_int;
 #include "SDL_syswm.h"
 #else
 #include "SDL2/SDL.h"
+#if defined(__ANDROID__)
+#include "SDL2/SDL_syswm.h"
+#include <android/native_window.h>
+#endif
 // SDL_syswm.h is only needed for the Win32 HWND path in create_window(); on
 // Linux it pulls X11 <Xlib.h>, whose None/Bool/Status macros collide with C++
 // enum members (e.g. ultramodern::input::Pak::None), so it is not included here.
@@ -1112,6 +1116,28 @@ static void start_phase_poller() {
 // ---------------------------------------------------------------------------
 static SDL_GameController* controller = nullptr;
 
+// Donor-proven Wave Race behavior: rescan instead of relying solely on
+// SDL_CONTROLLERDEVICEADDED. Android can enumerate a controller before our
+// polling loop starts, leaving only its keyboard-compatible A/B events visible.
+static void refresh_primary_controller() {
+    if (controller != nullptr && !SDL_GameControllerGetAttached(controller)) {
+        SDL_GameControllerClose(controller);
+        controller = nullptr;
+    }
+    if (controller == nullptr) {
+        for (int i = 0; i < SDL_NumJoysticks(); ++i) {
+            if (!SDL_IsGameController(i)) continue;
+            controller = SDL_GameControllerOpen(i);
+            if (controller != nullptr) {
+                fprintf(stderr, "[input] opened controller: %s\n",
+                        SDL_GameControllerName(controller));
+                fflush(stderr);
+                break;
+            }
+        }
+    }
+}
+
 // ROGUESQ_FAKE_CONTROLLER=1 — report a connected controller and feed neutral
 // input even with no physical gamepad attached. Lets headless/automated runs
 // pass the game's "NO CONTROLLER" gate and reach the cinematic/menu for
@@ -1232,6 +1258,63 @@ SDL_Window*                  g_sdl_window = nullptr;
 static std::atomic<bool>     g_fullscreen{false};
 static std::atomic<bool>     g_fullscreen_dirty{false};
 
+#if defined(__ANDROID__)
+namespace rs64_android {
+    void publish_resume_window(void* window);
+}
+
+static std::atomic<bool> g_android_resume_pending{false};
+
+// Event watches observe lifecycle transitions without consuming events from the
+// game's controller/input queue. Only atomics and the runtime pause gate are
+// touched here; Vulkan ownership changes stay on their owning threads.
+static int SDLCALL android_lifecycle_event_watch(void*, SDL_Event* event) {
+    switch (event->type) {
+    case SDL_APP_WILLENTERBACKGROUND:
+        g_android_resume_pending.store(false, std::memory_order_release);
+        ultramodern::set_app_paused(true);
+        fprintf(stderr, "[android-lifecycle] background: emulation paused\n");
+        fflush(stderr);
+        break;
+    case SDL_APP_DIDENTERFOREGROUND:
+        // SDL may emit this before its replacement ANativeWindow is available.
+        // The main graphics loop retries rather than reproducing Wave Race's
+        // first-unlock-stays-frozen one-shot race.
+        g_android_resume_pending.store(true, std::memory_order_release);
+        fprintf(stderr, "[android-lifecycle] foreground: surface reacquire requested\n");
+        fflush(stderr);
+        break;
+    default:
+        break;
+    }
+    return 1;
+}
+
+static void try_resume_android_surface() {
+    if (!g_android_resume_pending.load(std::memory_order_acquire) || !g_sdl_window) {
+        return;
+    }
+
+    SDL_SysWMinfo info{};
+    SDL_VERSION(&info.version);
+    if (SDL_GetWindowWMInfo(g_sdl_window, &info) != SDL_TRUE ||
+        info.subsystem != SDL_SYSWM_ANDROID || info.info.android.window == nullptr) {
+        return;
+    }
+
+    ANativeWindow* window = info.info.android.window;
+    if (ANativeWindow_getWidth(window) <= 0 || ANativeWindow_getHeight(window) <= 0) {
+        return;
+    }
+
+    rs64_android::publish_resume_window(window);
+    g_android_resume_pending.store(false, std::memory_order_release);
+    ultramodern::set_app_paused(false);
+    fprintf(stderr, "[android-lifecycle] replacement surface published; emulation resumed\n");
+    fflush(stderr);
+}
+#endif
+
 extern "C" void rs64_set_fullscreen(int on)   { g_fullscreen.store(on != 0); g_fullscreen_dirty.store(true); }
 extern "C" int  rs64_get_fullscreen(void)     { return g_fullscreen.load() ? 1 : 0; }
 extern "C" void rs64_toggle_fullscreen(void)  { g_fullscreen.store(!g_fullscreen.load()); g_fullscreen_dirty.store(true); }
@@ -1308,6 +1391,8 @@ static void poll_input() {
             }
         }
     }
+    refresh_primary_controller();
+
     // Drain SDL's relative-motion accumulator once per poll. Read from the
     // internal state (updated before RT64's event filter), so capture is robust
     // in dev mode. Only feed the resolver while capture is engaged.
@@ -1665,6 +1750,9 @@ ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::
         exit(EXIT_FAILURE);
     }
     extern SDL_Window* g_sdl_window; g_sdl_window = sdl_window;
+#if defined(__ANDROID__)
+    SDL_AddEventWatch(android_lifecycle_event_watch, nullptr);
+#endif
 #if defined(_WIN32)
     SDL_SysWMinfo wm{};
     SDL_VERSION(&wm.version);
@@ -1688,6 +1776,11 @@ void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
     // intercepts F1-F4 here (filters run before SDL_PollEvent dequeues), so
     // the controller-input poll on the game thread never sees those keys.
     SDL_PumpEvents();
+#if defined(__ANDROID__)
+    // This loop remains alive while the VI/emulation thread is parked. Retry on
+    // every pump until SDL publishes the replacement native surface.
+    try_resume_android_surface();
+#endif
 
     // Build the menu config once here on the main thread (early, before the menu),
     // so the game-thread menu hooks never do the file I/O + mod-mutex work that

@@ -1,6 +1,6 @@
 [submodule "lib/N64ModernRuntime"]
 	path = lib/N64ModernRuntime
-	url = https://github.com/MikeSemicolonD/N64ModernRuntime.git
+	url = https://github.com/HLLArtyParty/N64ModernRuntime-rs64-android.git
 [submodule "lib/rt64"]
 	path = lib/rt64
-	url = https://github.com/MikeSemicolonD/rt64.git
+	url = https://github.com/HLLArtyParty/rt64-rs64-android.git
