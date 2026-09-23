@@ -45,6 +45,14 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 set(RT64_STATIC TRUE)
 set(RT64_SDL_WINDOW_VULKAN TRUE)
 add_compile_definitions(HLSL_CPU)
+if(ANDROID)
+    find_package(SDL2 REQUIRED)
+    if(NOT TARGET nfd)
+        add_library(nfd STATIC ${CMAKE_SOURCE_DIR}/src/android/nfd_android_stub.cpp)
+        target_include_directories(nfd PUBLIC
+            ${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/nativefiledialog-extended/src/include)
+    endif()
+endif()
 # Enable D3D12 debug layer to get readable error messages from DirectX
 # instead of cryptic crashes deep in D3D12GetInterface. RT64's plume layer
 # checks for D3D12_DEBUG_LAYER_ENABLED at compile time. Set via
@@ -288,9 +296,13 @@ if (MSVC)
 else()
     set(RSP_UCODE_FORCE_INCLUDE "-include;${CMAKE_SOURCE_DIR}/include/rsp_dpc_macros.h")
 endif()
+set(RSP_UCODE_COMPILE_OPTIONS ${RSP_UCODE_FORCE_INCLUDE})
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+    list(APPEND RSP_UCODE_COMPILE_OPTIONS -msse4.1)
+endif()
 set_source_files_properties(${FACTOR5_UCODE_C} ${FACTOR5_BOOT_C} ${MUSYX_AUDIO_C} PROPERTIES
     LANGUAGE CXX
-    COMPILE_OPTIONS "-msse4.1;${RSP_UCODE_FORCE_INCLUDE}")
+    COMPILE_OPTIONS "${RSP_UCODE_COMPILE_OPTIONS}")
 
 # Generate the game-state table header from the canonical descriptor (state_model.toml).
 set(STATE_TABLE_INL ${CMAKE_SOURCE_DIR}/src/main/state_table.inl)
@@ -306,7 +318,7 @@ if (Python3_Interpreter_FOUND)
     add_custom_target(gen_state_table DEPENDS ${STATE_TABLE_INL})
 endif()
 
-add_executable(RogueSquadron64Recomp
+set(ROGUESQ_SOURCES
     ${CMAKE_SOURCE_DIR}/src/main/main.cpp
     ${CMAKE_SOURCE_DIR}/src/main/game_state.cpp
     ${CMAKE_SOURCE_DIR}/src/main/nav_sequencer.cpp
@@ -324,6 +336,12 @@ add_executable(RogueSquadron64Recomp
     ${MUSYX_AUDIO_C}
     $<$<PLATFORM_ID:Windows>:${CMAKE_SOURCE_DIR}/src/main/app.rc>
 )
+if(ANDROID)
+    list(APPEND ROGUESQ_SOURCES ${CMAKE_SOURCE_DIR}/src/android/android_entry.cpp)
+    add_library(RogueSquadron64Recomp SHARED ${ROGUESQ_SOURCES})
+else()
+    add_executable(RogueSquadron64Recomp ${ROGUESQ_SOURCES})
+endif()
 if (TARGET gen_state_table)
     add_dependencies(RogueSquadron64Recomp gen_state_table)
 endif()
@@ -422,6 +440,10 @@ if (WIN32)
     # SDL2main (pulled in transitively) must not be linked: its SDL_windows_main.obj
     # references SDL_main, which we intentionally do not provide.
     target_link_options(RogueSquadron64Recomp PRIVATE /NODEFAULTLIB:SDL2main.lib)
+elseif (ANDROID)
+    target_include_directories(RogueSquadron64Recomp PRIVATE ${SDL2_INCLUDE_DIRS})
+    target_link_libraries(RogueSquadron64Recomp PRIVATE SDL2::SDL2 android log vulkan)
+    target_link_options(RogueSquadron64Recomp PRIVATE "-Wl,-z,max-page-size=16384")
 elseif (APPLE)
     find_package(SDL2 REQUIRED)
     find_package(Threads REQUIRED)
@@ -440,13 +462,15 @@ endif()
 # menu-example) are self-contained with their own builds (mods/<name>/CMakeLists.txt),
 # so the game build neither compiles their DLLs nor ships them — they are stripped
 # from the staged tree.
-add_custom_command(TARGET RogueSquadron64Recomp POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_SOURCE_DIR}/mods"
-        $<TARGET_FILE_DIR:RogueSquadron64Recomp>/mods
-    COMMAND ${CMAKE_COMMAND} -E rm -rf
-        "$<TARGET_FILE_DIR:RogueSquadron64Recomp>/mods/native-demo"
-        "$<TARGET_FILE_DIR:RogueSquadron64Recomp>/mods/menu-example")
+if(NOT ANDROID)
+    add_custom_command(TARGET RogueSquadron64Recomp POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/mods"
+            $<TARGET_FILE_DIR:RogueSquadron64Recomp>/mods
+        COMMAND ${CMAKE_COMMAND} -E rm -rf
+            "$<TARGET_FILE_DIR:RogueSquadron64Recomp>/mods/native-demo"
+            "$<TARGET_FILE_DIR:RogueSquadron64Recomp>/mods/menu-example")
+endif()
 
 # PatchesLib is an OBJECT library: its objects go straight onto the exe link
 # line ahead of RecompiledFuncs (the .lib), so the patch definitions win any

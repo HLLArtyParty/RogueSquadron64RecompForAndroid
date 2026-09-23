@@ -35,7 +35,9 @@ static unsigned g_rs64_audio_underruns = 0;   // dry-queue arrivals (see queue_s
 using recomp::dbg::env_on;
 using recomp::dbg::env_int;
 
+#if !defined(__ANDROID__)
 #define SDL_MAIN_HANDLED
+#endif
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -1956,6 +1958,8 @@ struct CliFlag {
     const char* help;
 };
 static const CliFlag kCliFlags[] = {
+    {"android-data-dir", "ROGUESQ_ANDROID_DATA_DIR", CliFlag::Value, "", "", "Android app-private data directory"},
+    {"android-program-dir", "ROGUESQ_ANDROID_PROGRAM_DIR", CliFlag::Value, "", "", "Android staged program directory"},
     {"gfx-api",          "ROGUESQ_GFX_API",          CliFlag::Value, "",  "",  "graphics API: vulkan | d3d12 (default auto)"},
     {"hle-dev-mode",     "ROGUESQ_HLE_DEV_MODE",     CliFlag::Bool,  "1", "0", "RT64 ImGui inspector on F1 (default on in Debug)"},
     {"vi-driven-loop",   "ROGUESQ_VI_DRIVEN_LOOP",   CliFlag::Bool,  "1", "0", "hardware VI/SP/DP frame protocol (default on); --no- restores host-paced loop"},
@@ -2061,6 +2065,31 @@ int main(int argc, char* argv[]) {
         return rc;
     }
 
+    std::filesystem::path config_path = std::filesystem::current_path();
+
+#if defined(__ANDROID__)
+    if (const char* data_dir = recomp::os::getenv("ROGUESQ_ANDROID_DATA_DIR");
+        data_dir && data_dir[0]) {
+        config_path = data_dir;
+        std::error_code ec;
+        std::filesystem::create_directories(config_path, ec);
+        const std::filesystem::path log_path = config_path / "roguesq-runtime.log";
+        (void)freopen(log_path.string().c_str(), "a", stdout);
+        (void)freopen(log_path.string().c_str(), "a", stderr);
+        fprintf(stderr, "[android] runtime log opened\n");
+    }
+    if (const char* program_dir = recomp::os::getenv("ROGUESQ_ANDROID_PROGRAM_DIR");
+        program_dir && program_dir[0]) {
+        std::error_code ec;
+        std::filesystem::current_path(program_dir, ec);
+        if (ec) {
+            fprintf(stderr, "[android] failed to set program directory '%s': %s\n",
+                    program_dir, ec.message().c_str());
+            return 2;
+        }
+    }
+#endif
+
     // Input bindings: load roguesq_input.json next to the exe, or write the
     // defaults as an editable template if it's absent. ROGUESQ_INPUT_RESET=1
     // overwrites it with defaults.
@@ -2100,7 +2129,12 @@ int main(int argc, char* argv[]) {
     // GlobalLogFile only exists in RT64 debug builds (under !NDEBUG); in Release
     // the RT64_LOG_* macros are no-ops, so the redirect is both unneeded and uncompilable.
 #ifndef NDEBUG
-    if (FILE *nul = recomp::os::fopen("NUL", "w")) {
+#if defined(__ANDROID__)
+    const char* null_device = "/dev/null";
+#else
+    const char* null_device = "NUL";
+#endif
+    if (FILE *nul = recomp::os::fopen(null_device, "w")) {
         RT64::GlobalLogFile = nul;
     } else {
         RT64::GlobalLogFile = stderr;  // last-resort fallback
@@ -2225,8 +2259,8 @@ int main(int argc, char* argv[]) {
 
     rs64_register_overlays();
 
-    // Use the working directory as the config/data path (portable mode).
-    recomp::register_config_path(std::filesystem::current_path());
+    // Desktop uses portable mode; Android supplies its writable app-private directory.
+    recomp::register_config_path(config_path);
 
     for (const auto& game : supported_games) {
         recomp::register_game(game);

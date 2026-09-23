@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 
 #ifdef _WIN32
@@ -303,6 +305,11 @@ std::string source_label(const Source& s) {
 }
 
 std::string default_config_path() {
+#if defined(__ANDROID__)
+    if (const char* data = std::getenv("ROGUESQ_ANDROID_DATA_DIR"); data && data[0]) {
+        return (std::filesystem::path(data) / "roguesq_input.json").string();
+    }
+#endif
     std::string dir;
     char* base = SDL_GetBasePath();
     if (base) { dir = base; SDL_free(base); }

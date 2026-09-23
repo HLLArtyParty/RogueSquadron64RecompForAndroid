@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include "SDL.h"
+#include "SDL_syswm.h"
 #include "common/rt64_user_configuration.h"
 #include "video_config.h"
 
@@ -132,7 +133,15 @@ public:
         RT64::Application::Core appCore{};
 #if defined(_WIN32)
         appCore.window = window_handle.window;
-#elif defined(__linux__) || defined(__ANDROID__)
+#elif defined(__ANDROID__)
+        SDL_SysWMinfo wm_info{};
+        SDL_VERSION(&wm_info.version);
+        if (!SDL_GetWindowWMInfo(window_handle, &wm_info)) {
+            fprintf(stderr, "[RT64] SDL_GetWindowWMInfo failed: %s\n", SDL_GetError());
+            return;
+        }
+        appCore.window = wm_info.info.android.window;
+#elif defined(__linux__)
         appCore.window = window_handle;
 #elif defined(__APPLE__)
         appCore.window.window = window_handle.window;
@@ -198,20 +207,27 @@ public:
         // setting is discoverable/editable. RT64's to_json/from_json handle the enums as strings.
         // The ROGUESQ_* env vars below still override the file (dev/testing escape hatch).
         {
-            std::string cfgPath;
-            if (char* base = SDL_GetBasePath()) { cfgPath = base; SDL_free(base); }
-            cfgPath += "roguesq_video.json";
-            video_cfg_path_ = cfgPath;                           // enables F1-menu save-back
-            rs64::video::LoadResult lr = rs64::video::load(app->userConfig, cfgPath);
+            std::filesystem::path cfgPath;
+#if defined(__ANDROID__)
+            if (const char* data = recomp::os::getenv("ROGUESQ_ANDROID_DATA_DIR"); data && data[0]) {
+                cfgPath = std::filesystem::path(data) / "roguesq_video.json";
+            }
+#endif
+            if (cfgPath.empty()) {
+                if (char* base = SDL_GetBasePath()) { cfgPath = base; SDL_free(base); }
+                cfgPath /= "roguesq_video.json";
+            }
+            video_cfg_path_ = cfgPath.string();                  // enables F1-menu save-back
+            rs64::video::LoadResult lr = rs64::video::load(app->userConfig, video_cfg_path_);
             if (lr.loaded) {
-                fprintf(stderr, "[RT64] loaded %s%s\n", cfgPath.c_str(),
+                fprintf(stderr, "[RT64] loaded %s%s\n", video_cfg_path_.c_str(),
                         lr.migrated ? " (migrated to friendly schema)" : "");
             }
             if (!lr.loaded || lr.migrated) {
                 std::ofstream out{cfgPath, std::ios::trunc};
                 if (out) {
                     out << rs64::video::to_friendly(app->userConfig).dump(2) << "\n";
-                    fprintf(stderr, "[RT64] wrote %s %s\n", cfgPath.c_str(),
+                    fprintf(stderr, "[RT64] wrote %s %s\n", cfgPath.string().c_str(),
                             lr.migrated ? "(migrated)" : "(default)");
                 }
             }

@@ -41,5 +41,10 @@ void rsp_dpc_submit(uint8_t* rdram, uint32_t start, uint32_t end);
 #define RSP_DPC_PIPEBUSY_READ() (0u)
 #define RSP_DPC_TMEM_READ()    (0u)
 
+// Older RSPRecomp revisions emit SET_DPC_* for mtc0 writes. Keep both
+// spellings mapped to the same bridge so generated sources remain portable.
+#define SET_DPC_START(value)   do { g_rsp_dpc_start = (uint32_t)(value); } while (0)
+#define SET_DPC_END(value)     do { uint32_t _v = (uint32_t)(value); g_rsp_dpc_end = _v; rsp_dpc_submit(rdram, g_rsp_dpc_start, _v); } while (0)
+
 #endif // __cplusplus
 #endif // RSP_DPC_MACROS_H

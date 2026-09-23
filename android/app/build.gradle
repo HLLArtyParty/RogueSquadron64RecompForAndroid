@@ -1,0 +1,46 @@
+plugins { id 'com.android.application' }
+
+def projectRoot = rootProject.projectDir.parentFile
+def sdlPrefix = System.getenv('RS64_ANDROID_SDL2_PREFIX') ?: new File(projectRoot, '.android-prefixes/SDL2-2.32.10-android-arm64-vulkanfix1').absolutePath
+def hostFileToC = System.getenv('RS64_ANDROID_FILE_TO_C') ?: new File(projectRoot, 'build-host-tools/file_to_c').absolutePath
+def generatedJni = layout.buildDirectory.dir('generated/jniLibs').get().asFile
+
+android {
+    namespace 'com.hllartyparty.roguesquadron64recomp'
+    compileSdk 35
+    ndkVersion '27.1.12297006'
+
+    defaultConfig {
+        applicationId 'com.hllartyparty.roguesquadron64recomp'
+        minSdk 28
+        targetSdk 35
+        versionCode 1
+        versionName '0.0.1-bringup'
+        ndk { abiFilters 'arm64-v8a' }
+        externalNativeBuild {
+            cmake {
+                arguments '-DANDROID_PLATFORM=android-28', '-DANDROID_STL=c++_shared',
+                    "-DCMAKE_PREFIX_PATH=${sdlPrefix}",
+                    "-DSDL2_DIR=${sdlPrefix}/lib/cmake/SDL2",
+                    "-DZELDA_HOST_FILE_TO_C=${hostFileToC}",
+                    '-DCMAKE_BUILD_TYPE=RelWithDebInfo'
+                cppFlags '-O2', '-g', '-DNDEBUG'
+                cFlags '-O2', '-g', '-DNDEBUG'
+                targets 'RogueSquadron64Recomp'
+            }
+        }
+    }
+
+    buildTypes { debug { ndk { debugSymbolLevel 'SYMBOL_TABLE' } } }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    externalNativeBuild { cmake { path new File(projectRoot, 'CMakeLists.txt'); version '3.22.1' } }
+    sourceSets { main { jniLibs.srcDirs = [generatedJni] } }
+    packaging { jniLibs { useLegacyPackaging true } }
+}
+
+tasks.register('stageNativeRuntime', Copy) {
+    from("${sdlPrefix}/lib/libSDL2.so")
+    into(new File(generatedJni, 'arm64-v8a'))
+}
+
+tasks.named('preBuild') { dependsOn 'stageNativeRuntime' }

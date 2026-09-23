@@ -762,7 +762,7 @@ text = '''{ extern void rs64_pause_install(uint8_t* rdram); rs64_pause_install(r
 # r20 = &entry.textId, so entry.nextMenu is at +0x2. We override r2 (the label
 # pointer) before the sprintf %s consumes it.
 [[patches.hook]]
-func = "runPauseMenuStateMachine"
+func = "func_800C30C8" # menuSubtype02Handler; owns the 0x800C3550 pause-entry label path
 before_vram = 0x800C3550
 text = '''{
     extern unsigned rs64_pause_label_for(uint8_t* rdram, unsigned marker);

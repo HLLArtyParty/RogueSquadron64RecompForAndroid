@@ -142,7 +142,13 @@ if is_main_ucode and ITER_MARKER not in text:
 # ---------------------------------------------------------------------------
 MUSYX_MARKER = "/* fixup: musyx runaway cap */"
 is_musyx = "musyx_audio(" in text
-if is_musyx and MUSYX_MARKER not in text:
+# Repair output produced by the older fixup, whose closed marker was followed
+# by more comment text and a second terminator.
+text = text.replace(
+    "/* fixup: musyx runaway cap */ top-level jr $ra (r31=0) = task complete */",
+    "/* fixup: musyx runaway cap: top-level jr $ra (r31=0) = task complete */",
+)
+if is_musyx and "fixup: musyx runaway cap" not in text:
     entry_pattern = re.compile(r"(\n    RSP rsp\{\};\n)")
     if entry_pattern.search(text):
         text = entry_pattern.sub(
@@ -152,7 +158,7 @@ if is_musyx and MUSYX_MARKER not in text:
     if dij_pattern.search(text):
         replacement = (
             "do_indirect_jump:\n"
-            "    if (jump_target == 0) {  " + MUSYX_MARKER + " top-level jr $ra (r31=0) = task complete */\n"
+            "    if (jump_target == 0) {  /* fixup: musyx runaway cap: top-level jr $ra (r31=0) = task complete */\n"
             "        return RspExitReason::Broke;\n"
             "    }\n"
             "    if (++rs64_iter > (1L<<20)) {  " + MUSYX_MARKER + "\n"
