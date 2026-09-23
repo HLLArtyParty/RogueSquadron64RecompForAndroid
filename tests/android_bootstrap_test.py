@@ -95,6 +95,12 @@ def test_android_arm64_and_storage_guards() -> None:
         "FILE_TO_C_DEP",
     )
     require(
+        "lib/rt64/src/hle/rt64_application.cpp",
+        "#if defined(__ANDROID__)",
+        "swapChainDesc.format = RenderFormat::R8G8B8A8_UNORM;",
+        "swapChainDesc.format = RenderFormat::B8G8R8A8_UNORM;",
+    )
+    require(
         "lib/rt64/src/hle/rt64_application_window.cpp",
         "wmInfo.info.android.window",
         "defined(__linux__) && !defined(__ANDROID__)",
