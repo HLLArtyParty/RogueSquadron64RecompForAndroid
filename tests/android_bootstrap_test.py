@@ -148,6 +148,14 @@ def test_android_arm64_and_storage_guards() -> None:
     assert "extern \"C\" volatile int g_active_overlay;" not in workload_source
     assert "if (g_active_overlay == 0)" not in workload_source
     require(
+        "lib/rt64/src/hle/rt64_present_queue.cpp",
+        "extern \"C\" volatile int g_active_overlay;",
+        "if (g_active_overlay == 0)",
+        "missionPresentation.resolutionScale.x = missionPresentation.resolutionScale.y;",
+        "VIRenderer::getViewportAndScissor",
+        "commandList->clearColor(0, RenderColor(), missionSideBars",
+    )
+    require(
         "src/main/main.cpp",
         "SDL_AddEventWatch(android_lifecycle_event_watch",
         "SDL_APP_WILLENTERBACKGROUND",
