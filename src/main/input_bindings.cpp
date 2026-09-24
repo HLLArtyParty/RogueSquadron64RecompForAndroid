@@ -142,10 +142,15 @@ Bindings default_bindings() {
     add(Target::DpadRight,pb(SDL_CONTROLLER_BUTTON_DPAD_RIGHT));
     add(Target::LTrig, pb(SDL_CONTROLLER_BUTTON_LEFTSHOULDER));
     add(Target::RTrig, pb(SDL_CONTROLLER_BUTTON_RIGHTSHOULDER));
-    add(Target::CUp,   pb(SDL_CONTROLLER_BUTTON_Y));
-    add(Target::CDown, pb(SDL_CONTROLLER_BUTTON_B));
-    add(Target::CLeft, pb(SDL_CONTROLLER_BUTTON_BACK));
-    add(Target::CRight,pb(SDL_CONTROLLER_BUTTON_GUIDE));
+    // Wave Race/RecompFrontend layout: the right stick is the N64 C cluster.
+    // Y/B are accessible digital aliases for C-left/C-right; Android commonly
+    // reserves Back/Guide, so never depend on those for gameplay actions.
+    add(Target::CLeft,  pax(SDL_CONTROLLER_AXIS_RIGHTX, -1));
+    add(Target::CLeft,  pb(SDL_CONTROLLER_BUTTON_Y));
+    add(Target::CRight, pax(SDL_CONTROLLER_AXIS_RIGHTX, +1));
+    add(Target::CRight, pb(SDL_CONTROLLER_BUTTON_B));
+    add(Target::CUp,    pax(SDL_CONTROLLER_AXIS_RIGHTY, -1));
+    add(Target::CDown,  pax(SDL_CONTROLLER_AXIS_RIGHTY, +1));
     add(Target::Z,     pax(SDL_CONTROLLER_AXIS_TRIGGERLEFT, +1));
     add(Target::StickRight, pax(SDL_CONTROLLER_AXIS_LEFTX, +1));
     add(Target::StickLeft,  pax(SDL_CONTROLLER_AXIS_LEFTX, -1));
@@ -321,6 +326,11 @@ bool load_bindings(Bindings& b, const std::string& path) {
     if (!f.is_open()) return false;
     json j;
     try { f >> j; } catch (...) { return false; }
+#if defined(__ANDROID__)
+    // Schema 1 used Back/Guide for C-left/right and had no right-stick C map.
+    // Reject it once so an APK upgrade writes the corrected defaults.
+    if (j.value("schema", 0) < 2) return false;
+#endif
 
     if (j.contains("mouse") && j["mouse"].is_object()) {
         const json& m = j["mouse"];
@@ -348,6 +358,7 @@ bool load_bindings(Bindings& b, const std::string& path) {
 
 bool save_bindings(const Bindings& b, const std::string& path) {
     json j;
+    j["schema"] = 2;
     j["mouse"] = { {"sensitivity", b.mouse_sensitivity},
                    {"smoothing", b.mouse_smoothing}, {"curve", b.mouse_curve},
                    {"invert_x", b.mouse_invert_x}, {"invert_y", b.mouse_invert_y} };

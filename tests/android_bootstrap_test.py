@@ -116,7 +116,8 @@ def test_android_arm64_and_storage_guards() -> None:
     require(
         "src/main/rt64_render_context.cpp",
         "#if defined(__ANDROID__)",
-        "app->userConfig.aspectRatio = UC::AspectRatio::Expand;",
+        "app->userConfig.aspectRatio = UC::AspectRatio::Manual;",
+        "app->userConfig.aspectTarget = 16.0 / 9.0;",
         "app->userConfig.extAspectRatio = UC::AspectRatio::Manual;",
         "app->userConfig.extAspectTarget = 16.0 / 9.0;",
     )
@@ -125,6 +126,28 @@ def test_android_arm64_and_storage_guards() -> None:
         "onWindowFocusChanged",
         "SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION",
         "LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES",
+    )
+    require(
+        "src/main/input_bindings.cpp",
+        "SDL_CONTROLLER_AXIS_RIGHTX, -1",
+        "SDL_CONTROLLER_AXIS_RIGHTX, +1",
+        "SDL_CONTROLLER_AXIS_RIGHTY, -1",
+        "SDL_CONTROLLER_AXIS_RIGHTY, +1",
+        'j["schema"] = 2;',
+        'j.value("schema", 0) < 2',
+    )
+    input_source = (ROOT / "src/main/input_bindings.cpp").read_text(encoding="utf-8")
+    assert "Target::CLeft, pb(SDL_CONTROLLER_BUTTON_BACK)" not in input_source
+    assert "Target::CRight,pb(SDL_CONTROLLER_BUTTON_GUIDE)" not in input_source
+    require(
+        "src/main/rt64_render_context.cpp",
+        "app->userConfig.aspectRatio = UC::AspectRatio::Manual;",
+        "app->userConfig.aspectTarget = 16.0 / 9.0;",
+    )
+    require(
+        "lib/rt64/src/hle/rt64_workload_queue.cpp",
+        "g_active_overlay == 0",
+        "workloadConfig.aspectRatioSource = 4.0f / 3.0f;",
     )
     require(
         "src/main/main.cpp",
