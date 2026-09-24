@@ -180,9 +180,10 @@ def test_android_arm64_and_storage_guards() -> None:
         "src/main/rt64_render_context.cpp",
         'std::string_view(display_mode) == "horplus"',
         "app->userConfig.aspectRatio = UC::AspectRatio::Expand;",
-        "app->userConfig.extAspectTarget = 4.0 / 3.0;",
         "app->userConfig.extAspectTarget = 16.0 / 9.0;",
     )
+    render_source = (ROOT / "src/main/rt64_render_context.cpp").read_text(encoding="utf-8")
+    assert "app->userConfig.extAspectTarget = 4.0 / 3.0;" not in render_source
     require(
         "CMakeLists.txt",
         "setupCameraMatrices=setupCameraMatrices_original",

@@ -333,19 +333,16 @@ public:
         }
 
 #if defined(__ANDROID__)
-        // Both modes retain the proven Expand presentation path. Experimental
-        // Hor+ changes only the game's interactive projection (host wrapper
-        // below) and keeps RT64's external/HUD plane at authored 4:3.
+        // Both modes retain the proven Expand presentation and 16:9 Factor-5
+        // external plane. Experimental Hor+ differs only in the isolated game
+        // projection wrapper; forcing this plane to 4:3 split the radar mesh
+        // from its HUD ring and exposed stale side surfaces.
         app->userConfig.graphicsAPI = UC::GraphicsAPI::Vulkan;
         const char* display_mode = env_str("ROGUESQ_DISPLAY_MODE");
         const bool horplus = display_mode && std::string_view(display_mode) == "horplus";
         app->userConfig.aspectRatio = UC::AspectRatio::Expand;
         app->userConfig.extAspectRatio = UC::AspectRatio::Manual;
-        if (horplus) {
-            app->userConfig.extAspectTarget = 4.0 / 3.0;
-        } else {
-            app->userConfig.extAspectTarget = 16.0 / 9.0;
-        }
+        app->userConfig.extAspectTarget = 16.0 / 9.0;
         app->userConfig.refreshRate = UC::RefreshRate::Display;
         app->userConfig.displayBuffering = UC::DisplayBuffering::Triple;
         fprintf(stderr, "[RT64] Android display mode: %s, Vulkan, display refresh\n",
