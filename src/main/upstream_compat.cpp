@@ -64,6 +64,7 @@ extern "C" volatile int g_active_overlay = -1;
 // guPerspective callers retain the original behavior byte-for-byte.
 extern "C" void setupCameraMatrices_original(uint8_t* rdram, recomp_context* ctx);
 extern "C" void guPerspective_original(uint8_t* rdram, recomp_context* ctx);
+extern "C" void buildVisibleTerrainGridAroundCamera_original(uint8_t* rdram, recomp_context* ctx);
 static thread_local bool s_rs64_interactive_camera = false;
 
 extern "C" void setupCameraMatrices(uint8_t* rdram, recomp_context* ctx) {
@@ -95,6 +96,32 @@ extern "C" void guPerspective(uint8_t* rdram, recomp_context* ctx) {
         ctx->r7 = static_cast<int32_t>(aspect_bits);
     }
     guPerspective_original(rdram, ctx);
+}
+
+extern "C" void buildVisibleTerrainGridAroundCamera(uint8_t* rdram, recomp_context* ctx) {
+    const char* display_mode = env_str("ROGUESQ_DISPLAY_MODE");
+    const bool horplus = display_mode && std::strcmp(display_mode, "horplus") == 0;
+    if (!horplus || (g_active_overlay != 0)) {
+        buildVisibleTerrainGridAroundCamera_original(rdram, ctx);
+        return;
+    }
+
+    // The terrain streamer rasterizes a camera-footprint polygon using a 4:3
+    // basis of horizontal=-4 and vertical=-3. Widen only that horizontal basis
+    // to -16/3 while the original function runs, then restore game state.
+    const gpr horizontal_extent_addr = static_cast<gpr>(0xFFFFFFFF8003A51Cull);
+    const int32_t saved_horizontal_extent = MEM_W(0, horizontal_extent_addr);
+    MEM_W(0, horizontal_extent_addr) = static_cast<int32_t>(0xC0AAAAABu);
+
+    static bool logged = false;
+    if (!logged) {
+        std::fprintf(stderr, "[widescreen] terrain footprint horizontal extent: -4 -> -16/3\n");
+        std::fflush(stderr);
+        logged = true;
+    }
+
+    buildVisibleTerrainGridAroundCamera_original(rdram, ctx);
+    MEM_W(0, horizontal_extent_addr) = saved_horizontal_extent;
 }
 
 // Called from the loadOverlay (0x80000B20) hook with the overlay id. librecomp's boot-time

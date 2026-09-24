@@ -138,6 +138,8 @@ set_source_files_properties("${RECOMP_FUNCS_DIR}/funcs_4.c" PROPERTIES
     COMPILE_DEFINITIONS "setupCameraMatrices=setupCameraMatrices_original")
 set_source_files_properties("${RECOMP_FUNCS_DIR}/funcs_8.c" PROPERTIES
     COMPILE_DEFINITIONS "guPerspective=guPerspective_original")
+set_source_files_properties("${RECOMP_FUNCS_DIR}/funcs_9.c" PROPERTIES
+    COMPILE_DEFINITIONS "buildVisibleTerrainGridAroundCamera=buildVisibleTerrainGridAroundCamera_original")
 
 # ---- Patches (Zelda-style override layer) ----
 # Hand-written C in patches/*.c is cross-compiled to MIPS by the decompals

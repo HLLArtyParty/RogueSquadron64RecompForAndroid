@@ -188,16 +188,21 @@ def test_android_arm64_and_storage_guards() -> None:
         "CMakeLists.txt",
         "setupCameraMatrices=setupCameraMatrices_original",
         "guPerspective=guPerspective_original",
+        "buildVisibleTerrainGridAroundCamera=buildVisibleTerrainGridAroundCamera_original",
     )
     require(
         "src/main/upstream_compat.cpp",
         "setupCameraMatrices_original",
         "guPerspective_original",
+        "buildVisibleTerrainGridAroundCamera_original",
         "void setupCameraMatrices(uint8_t* rdram, recomp_context* ctx)",
         "void guPerspective(uint8_t* rdram, recomp_context* ctx)",
+        "void buildVisibleTerrainGridAroundCamera(uint8_t* rdram, recomp_context* ctx)",
         "uint32_t(ctx->r4) == 0x80138D20u",
         "s_rs64_interactive_camera",
         "16.0f / 9.0f",
+        "0xFFFFFFFF8003A51Cull",
+        "0xC0AAAAABu",
     )
     workload_source = (ROOT / "lib/rt64/src/hle/rt64_workload_queue.cpp").read_text(encoding="utf-8")
     assert "g_active_overlay" not in workload_source
