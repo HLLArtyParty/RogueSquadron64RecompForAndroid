@@ -337,8 +337,7 @@ public:
         // viewport and external/HUD presentation to remain 16:9 across scene
         // transitions, overriding a desktop config cached by an earlier build.
         app->userConfig.graphicsAPI = UC::GraphicsAPI::Vulkan;
-        app->userConfig.aspectRatio = UC::AspectRatio::Manual;
-        app->userConfig.aspectTarget = 16.0 / 9.0;
+        app->userConfig.aspectRatio = UC::AspectRatio::Expand;
         app->userConfig.extAspectRatio = UC::AspectRatio::Manual;
         app->userConfig.extAspectTarget = 16.0 / 9.0;
         app->userConfig.refreshRate = UC::RefreshRate::Display;

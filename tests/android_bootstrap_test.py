@@ -116,8 +116,7 @@ def test_android_arm64_and_storage_guards() -> None:
     require(
         "src/main/rt64_render_context.cpp",
         "#if defined(__ANDROID__)",
-        "app->userConfig.aspectRatio = UC::AspectRatio::Manual;",
-        "app->userConfig.aspectTarget = 16.0 / 9.0;",
+        "app->userConfig.aspectRatio = UC::AspectRatio::Expand;",
         "app->userConfig.extAspectRatio = UC::AspectRatio::Manual;",
         "app->userConfig.extAspectTarget = 16.0 / 9.0;",
     )
@@ -141,14 +140,13 @@ def test_android_arm64_and_storage_guards() -> None:
     assert "Target::CRight,pb(SDL_CONTROLLER_BUTTON_GUIDE)" not in input_source
     require(
         "src/main/rt64_render_context.cpp",
-        "app->userConfig.aspectRatio = UC::AspectRatio::Manual;",
-        "app->userConfig.aspectTarget = 16.0 / 9.0;",
+        "app->userConfig.aspectRatio = UC::AspectRatio::Expand;",
+        "app->userConfig.extAspectRatio = UC::AspectRatio::Manual;",
+        "app->userConfig.extAspectTarget = 16.0 / 9.0;",
     )
-    require(
-        "lib/rt64/src/hle/rt64_workload_queue.cpp",
-        "g_active_overlay == 0",
-        "workloadConfig.aspectRatioSource = 4.0f / 3.0f;",
-    )
+    workload_source = (ROOT / "lib/rt64/src/hle/rt64_workload_queue.cpp").read_text(encoding="utf-8")
+    assert "extern \"C\" volatile int g_active_overlay;" not in workload_source
+    assert "if (g_active_overlay == 0)" not in workload_source
     require(
         "src/main/main.cpp",
         "SDL_AddEventWatch(android_lifecycle_event_watch",
