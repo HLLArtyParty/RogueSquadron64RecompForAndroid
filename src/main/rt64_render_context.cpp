@@ -333,16 +333,25 @@ public:
         }
 
 #if defined(__ANDROID__)
-        // Donor-proven Wave Race Android display defaults. Force both the game
-        // viewport and external/HUD presentation to remain 16:9 across scene
-        // transitions, overriding a desktop config cached by an earlier build.
+        // Normal mode preserves the device-verified safe baseline. Hor+ is an
+        // explicit experimental boot path: widen the 3D target while keeping
+        // RT64's external/HUD plane in its authored 4:3 coordinate space.
         app->userConfig.graphicsAPI = UC::GraphicsAPI::Vulkan;
-        app->userConfig.aspectRatio = UC::AspectRatio::Expand;
+        const char* display_mode = env_str("ROGUESQ_DISPLAY_MODE");
+        const bool horplus = display_mode && std::string_view(display_mode) == "horplus";
         app->userConfig.extAspectRatio = UC::AspectRatio::Manual;
-        app->userConfig.extAspectTarget = 16.0 / 9.0;
+        if (horplus) {
+            app->userConfig.aspectRatio = UC::AspectRatio::Manual;
+            app->userConfig.aspectTarget = 16.0 / 9.0;
+            app->userConfig.extAspectTarget = 4.0 / 3.0;
+        } else {
+            app->userConfig.aspectRatio = UC::AspectRatio::Expand;
+            app->userConfig.extAspectTarget = 16.0 / 9.0;
+        }
         app->userConfig.refreshRate = UC::RefreshRate::Display;
         app->userConfig.displayBuffering = UC::DisplayBuffering::Triple;
-        fprintf(stderr, "[RT64] Android display defaults: Vulkan, expand, HUD 16:9, display refresh\n");
+        fprintf(stderr, "[RT64] Android display mode: %s, Vulkan, display refresh\n",
+                horplus ? "experimental Hor+ 16:9 with 4:3 HUD" : "normal safe baseline");
 #endif
 
         // PresentEarly (default on): the cinematic stays on one VI fb address, so RT64's

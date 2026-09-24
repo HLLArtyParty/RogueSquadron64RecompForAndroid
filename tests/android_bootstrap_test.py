@@ -36,6 +36,8 @@ def test_android_project_structure() -> None:
         "extends SDLActivity",
         '"SDL2","RogueSquadron64Recomp"',
         "--android-data-dir=",
+        'getStringExtra("display_mode")',
+        '"--display-mode=" + displayMode',
     )
     require(
         "android/app/src/main/java/com/hllartyparty/roguesquadron64recomp/LauncherActivity.java",
@@ -45,6 +47,36 @@ def test_android_project_structure() -> None:
         "USA v1.0",
         "ed42eed1ee2db646ff7ef94ba8c5421d164a4f0d",
         "MessageDigest",
+        'normal.setText("Normal Boot")',
+        'widescreen.setText("16:9 Boot (Experimental)")',
+        'logs.setText("Show Log")',
+        'pick.setText("Choose Different ROM")',
+        'launchGame("normal")',
+        'launchGame("horplus")',
+        'putExtra("display_mode", displayMode)',
+        'copy.setText("Copy All")',
+        'share.setText("Share Log")',
+        "new ScrollView(this)",
+        "ClipboardManager",
+        "Intent.ACTION_SEND",
+        'new File(getFilesDir(), "roguesq-runtime.log")',
+        'new File(getFilesDir(), "roguesq-runtime.previous.log")',
+        "Showing previous boot log",
+        "MAX_LOG_CHARS",
+    )
+    launcher_source = (
+        ROOT
+        / "android/app/src/main/java/com/hllartyparty/roguesquadron64recomp/LauncherActivity.java"
+    ).read_text(encoding="utf-8")
+    assert "launchGame();\n        }" not in launcher_source, (
+        "an installed ROM must show the dashboard instead of auto-launching"
+    )
+    require(
+        "android/app/src/main/java/com/hllartyparty/roguesquadron64recomp/GameActivity.java",
+        'new File(getFilesDir(), "roguesq-runtime.log")',
+        'new File(getFilesDir(), "roguesq-runtime.previous.log")',
+        "rotateRuntimeLog()",
+        "new FileOutputStream(latest, false)",
     )
 
 
@@ -76,6 +108,8 @@ def test_android_arm64_and_storage_guards() -> None:
     )
     require(
         "src/main/main.cpp",
+        'freopen(log_path.string().c_str(), "a", stdout)',
+        'freopen(log_path.string().c_str(), "a", stderr)',
         "roguesq-runtime.log",
         "register_config_path(config_path)",
         '"/dev/null"',
@@ -139,18 +173,28 @@ def test_android_arm64_and_storage_guards() -> None:
     assert "Target::CLeft, pb(SDL_CONTROLLER_BUTTON_BACK)" not in input_source
     assert "Target::CRight,pb(SDL_CONTROLLER_BUTTON_GUIDE)" not in input_source
     require(
-        "src/main/rt64_render_context.cpp",
-        "app->userConfig.aspectRatio = UC::AspectRatio::Expand;",
-        "app->userConfig.extAspectRatio = UC::AspectRatio::Manual;",
-        "app->userConfig.extAspectTarget = 16.0 / 9.0;",
+        "src/main/main.cpp",
+        '{"display-mode",     "ROGUESQ_DISPLAY_MODE"',
     )
-    workload_source = (ROOT / "lib/rt64/src/hle/rt64_workload_queue.cpp").read_text(encoding="utf-8")
-    assert "extern \"C\" volatile int g_active_overlay;" not in workload_source
-    assert "if (g_active_overlay == 0)" not in workload_source
+    require(
+        "src/main/rt64_render_context.cpp",
+        'std::string_view(display_mode) == "horplus"',
+        "app->userConfig.aspectRatio = UC::AspectRatio::Manual;",
+        "app->userConfig.aspectTarget = 16.0 / 9.0;",
+        "app->userConfig.extAspectTarget = 4.0 / 3.0;",
+        "app->userConfig.aspectRatio = UC::AspectRatio::Expand;",
+    )
+    require(
+        "lib/rt64/src/hle/rt64_workload_queue.cpp",
+        "extern \"C\" volatile int g_active_overlay;",
+        'std::string_view(displayMode) == "horplus"',
+        "workloadConfig.aspectRatioSource = 4.0f / 3.0f;",
+    )
     require(
         "lib/rt64/src/hle/rt64_present_queue.cpp",
         "extern \"C\" volatile int g_active_overlay;",
-        "if (g_active_overlay == 0)",
+        'std::string_view(displayMode) != "horplus"',
+        "(g_active_overlay == 0)",
         "missionPresentation.resolutionScale.x = missionPresentation.resolutionScale.y;",
         "VIRenderer::getViewportAndScissor",
         "commandList->clearColor(0, RenderColor(), missionSideBars",

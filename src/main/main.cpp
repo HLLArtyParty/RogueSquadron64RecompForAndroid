@@ -2053,6 +2053,7 @@ struct CliFlag {
 static const CliFlag kCliFlags[] = {
     {"android-data-dir", "ROGUESQ_ANDROID_DATA_DIR", CliFlag::Value, "", "", "Android app-private data directory"},
     {"android-program-dir", "ROGUESQ_ANDROID_PROGRAM_DIR", CliFlag::Value, "", "", "Android staged program directory"},
+    {"display-mode",     "ROGUESQ_DISPLAY_MODE",     CliFlag::Value, "",  "",  "display mode: normal | horplus"},
     {"gfx-api",          "ROGUESQ_GFX_API",          CliFlag::Value, "",  "",  "graphics API: vulkan | d3d12 (default auto)"},
     {"hle-dev-mode",     "ROGUESQ_HLE_DEV_MODE",     CliFlag::Bool,  "1", "0", "RT64 ImGui inspector on F1 (default on in Debug)"},
     {"vi-driven-loop",   "ROGUESQ_VI_DRIVEN_LOOP",   CliFlag::Bool,  "1", "0", "hardware VI/SP/DP frame protocol (default on); --no- restores host-paced loop"},
