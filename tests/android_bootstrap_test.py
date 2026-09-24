@@ -59,6 +59,8 @@ def test_android_project_structure() -> None:
         "new ScrollView(this)",
         "ClipboardManager",
         "Intent.ACTION_SEND",
+        "Intent.EXTRA_STREAM",
+        "FLAG_GRANT_READ_URI_PERMISSION",
         'new File(getFilesDir(), "roguesq-runtime.log")',
         'new File(getFilesDir(), "roguesq-runtime.previous.log")',
         "Showing previous boot log",
@@ -70,6 +72,23 @@ def test_android_project_structure() -> None:
     ).read_text(encoding="utf-8")
     assert "launchGame();\n        }" not in launcher_source, (
         "an installed ROM must show the dashboard instead of auto-launching"
+    )
+    assert "Intent.EXTRA_TEXT" not in launcher_source, (
+        "complete logs must be attached as files rather than truncation-prone text payloads"
+    )
+    require(
+        "android/app/src/main/AndroidManifest.xml",
+        '.RuntimeLogProvider',
+        'android:grantUriPermissions="true"',
+        'android:exported="false"',
+    )
+    require(
+        "android/app/src/main/java/com/hllartyparty/roguesquadron64recomp/RuntimeLogProvider.java",
+        "extends ContentProvider",
+        "ParcelFileDescriptor.open",
+        "roguesq-runtime.previous.log",
+        "OpenableColumns.DISPLAY_NAME",
+        "OpenableColumns.SIZE",
     )
     require(
         "android/app/src/main/java/com/hllartyparty/roguesquadron64recomp/GameActivity.java",
@@ -203,7 +222,22 @@ def test_android_arm64_and_storage_guards() -> None:
         "16.0f / 9.0f",
         "0xFFFFFFFF8003A51Cull",
         "0xC0AAAAABu",
+        "g_rs64_interactive_projection_address.store",
+        "uint32_t(ctx->r4) & 0x00FFFFFFu",
     )
+    require(
+        "lib/rt64/src/render/rt64_framebuffer_renderer.cpp",
+        "g_rs64_interactive_projection_address",
+        "interactiveProjection",
+        "coversWholeWidth",
+        "horizontalRatio",
+        "[widescreen-probe]",
+        "fbScissor=",
+        "projScissor=",
+        "viewport=",
+    )
+    framebuffer_renderer_source = (ROOT / "lib/rt64/src/render/rt64_framebuffer_renderer.cpp").read_text(encoding="utf-8")
+    assert "useWideViewport = interactiveProjection" not in framebuffer_renderer_source
     workload_source = (ROOT / "lib/rt64/src/hle/rt64_workload_queue.cpp").read_text(encoding="utf-8")
     assert "g_active_overlay" not in workload_source
     assert "ROGUESQ_DISPLAY_MODE" not in workload_source

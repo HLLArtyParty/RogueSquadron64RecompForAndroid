@@ -183,7 +183,7 @@ public final class LauncherActivity extends Activity {
         copy.setOnClickListener(view -> copyLog(logText));
         Button share = new Button(this);
         share.setText("Share Log");
-        share.setOnClickListener(view -> shareLog(logText));
+        share.setOnClickListener(view -> shareLog());
         actions.addView(copy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         actions.addView(share, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
 
@@ -212,11 +212,14 @@ public final class LauncherActivity extends Activity {
         Toast.makeText(this, "Log copied", Toast.LENGTH_SHORT).show();
     }
 
-    private void shareLog(String text) {
+    private void shareLog() {
+        Uri logUri = Uri.parse("content://" + getPackageName() + ".logs/latest");
         Intent share = new Intent(Intent.ACTION_SEND);
         share.setType("text/plain");
         share.putExtra(Intent.EXTRA_SUBJECT, "Rogue Squadron 64 latest boot log");
-        share.putExtra(Intent.EXTRA_TEXT, text);
+        share.putExtra(Intent.EXTRA_STREAM, logUri);
+        share.setClipData(ClipData.newRawUri("Rogue Squadron boot log", logUri));
+        share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         startActivity(Intent.createChooser(share, "Share latest boot log"));
     }
 

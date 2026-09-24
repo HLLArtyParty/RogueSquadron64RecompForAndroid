@@ -58,6 +58,7 @@ extern "C" int rs64_fb_guards(void) { return rs64_fb_guards_mask() != 0; }
 // Which overlay is mapped at 0x800A5130: 0 = mission, 1 = menu, 2 = cinematic, -1 = none yet.
 // The F5 op_01 handler loads matrices only for the menu overlay.
 extern "C" volatile int g_active_overlay = -1;
+extern "C" std::atomic<uint32_t> g_rs64_interactive_projection_address{0};
 
 // Generated originals are renamed per-source in CMake so these wrappers can
 // isolate Hor+ to the interactive player camera. Other setupCameraMatrices and
@@ -90,6 +91,8 @@ extern "C" void setupCameraMatrices(uint8_t* rdram, recomp_context* ctx) {
 
 extern "C" void guPerspective(uint8_t* rdram, recomp_context* ctx) {
     if (s_rs64_interactive_camera) {
+        g_rs64_interactive_projection_address.store(
+            uint32_t(ctx->r4) & 0x00FFFFFFu, std::memory_order_relaxed);
         const float aspect = 16.0f / 9.0f;
         uint32_t aspect_bits = 0;
         std::memcpy(&aspect_bits, &aspect, sizeof(aspect_bits));

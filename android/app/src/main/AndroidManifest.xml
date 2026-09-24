@@ -9,6 +9,11 @@
             android:exported="false"
             android:screenOrientation="sensorLandscape"
             android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode" />
+        <provider
+            android:name=".RuntimeLogProvider"
+            android:authorities="${applicationId}.logs"
+            android:exported="false"
+            android:grantUriPermissions="true" />
         <activity
             android:name=".LauncherActivity"
             android:exported="true"
