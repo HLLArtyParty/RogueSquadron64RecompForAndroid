@@ -333,19 +333,17 @@ public:
         }
 
 #if defined(__ANDROID__)
-        // Normal mode preserves the device-verified safe baseline. Hor+ is an
-        // explicit experimental boot path: widen the 3D target while keeping
-        // RT64's external/HUD plane in its authored 4:3 coordinate space.
+        // Both modes retain the proven Expand presentation path. Experimental
+        // Hor+ changes only the game's interactive projection (host wrapper
+        // below) and keeps RT64's external/HUD plane at authored 4:3.
         app->userConfig.graphicsAPI = UC::GraphicsAPI::Vulkan;
         const char* display_mode = env_str("ROGUESQ_DISPLAY_MODE");
         const bool horplus = display_mode && std::string_view(display_mode) == "horplus";
+        app->userConfig.aspectRatio = UC::AspectRatio::Expand;
         app->userConfig.extAspectRatio = UC::AspectRatio::Manual;
         if (horplus) {
-            app->userConfig.aspectRatio = UC::AspectRatio::Manual;
-            app->userConfig.aspectTarget = 16.0 / 9.0;
             app->userConfig.extAspectTarget = 4.0 / 3.0;
         } else {
-            app->userConfig.aspectRatio = UC::AspectRatio::Expand;
             app->userConfig.extAspectTarget = 16.0 / 9.0;
         }
         app->userConfig.refreshRate = UC::RefreshRate::Display;

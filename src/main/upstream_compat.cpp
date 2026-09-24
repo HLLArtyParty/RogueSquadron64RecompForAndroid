@@ -59,6 +59,44 @@ extern "C" int rs64_fb_guards(void) { return rs64_fb_guards_mask() != 0; }
 // The F5 op_01 handler loads matrices only for the menu overlay.
 extern "C" volatile int g_active_overlay = -1;
 
+// Generated originals are renamed per-source in CMake so these wrappers can
+// isolate Hor+ to the interactive player camera. Other setupCameraMatrices and
+// guPerspective callers retain the original behavior byte-for-byte.
+extern "C" void setupCameraMatrices_original(uint8_t* rdram, recomp_context* ctx);
+extern "C" void guPerspective_original(uint8_t* rdram, recomp_context* ctx);
+static thread_local bool s_rs64_interactive_camera = false;
+
+extern "C" void setupCameraMatrices(uint8_t* rdram, recomp_context* ctx) {
+    const char* display_mode = env_str("ROGUESQ_DISPLAY_MODE");
+    const bool horplus = display_mode && std::strcmp(display_mode, "horplus") == 0;
+    const bool interactive = horplus && (g_active_overlay == 0) &&
+                             (uint32_t(ctx->r4) == 0x80138D20u);
+    const bool previous = s_rs64_interactive_camera;
+    s_rs64_interactive_camera = interactive;
+
+    if (interactive) {
+        static bool logged = false;
+        if (!logged) {
+            std::fprintf(stderr, "[widescreen] interactive camera 0x80138D20: projection aspect 16:9\n");
+            std::fflush(stderr);
+            logged = true;
+        }
+    }
+
+    setupCameraMatrices_original(rdram, ctx);
+    s_rs64_interactive_camera = previous;
+}
+
+extern "C" void guPerspective(uint8_t* rdram, recomp_context* ctx) {
+    if (s_rs64_interactive_camera) {
+        const float aspect = 16.0f / 9.0f;
+        uint32_t aspect_bits = 0;
+        std::memcpy(&aspect_bits, &aspect, sizeof(aspect_bits));
+        ctx->r7 = static_cast<int32_t>(aspect_bits);
+    }
+    guPerspective_original(rdram, ctx);
+}
+
 // Called from the loadOverlay (0x80000B20) hook with the overlay id. librecomp's boot-time
 // load_overlays only covers ROM offsets below 0x101000, so the menu and cinematic overlays
 // have to be swapped in here.

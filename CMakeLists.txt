@@ -131,6 +131,14 @@ file(GLOB RECOMP_C_SOURCES   CONFIGURE_DEPENDS ${RECOMP_FUNCS_DIR}/*.c)
 file(GLOB RECOMP_CXX_SOURCES CONFIGURE_DEPENDS ${RECOMP_FUNCS_DIR}/*.cpp)
 target_sources(RecompiledFuncs PRIVATE ${RECOMP_C_SOURCES} ${RECOMP_CXX_SOURCES})
 
+# Keep callable originals for the narrowly-scoped host widescreen wrappers.
+# Only the files that define these symbols see the rename; generated callers
+# continue to resolve setupCameraMatrices/guPerspective to upstream_compat.cpp.
+set_source_files_properties("${RECOMP_FUNCS_DIR}/funcs_4.c" PROPERTIES
+    COMPILE_DEFINITIONS "setupCameraMatrices=setupCameraMatrices_original")
+set_source_files_properties("${RECOMP_FUNCS_DIR}/funcs_8.c" PROPERTIES
+    COMPILE_DEFINITIONS "guPerspective=guPerspective_original")
+
 # ---- Patches (Zelda-style override layer) ----
 # Hand-written C in patches/*.c is cross-compiled to MIPS by the decompals
 # mips64-elf-gcc toolchain, then run back through N64Recomp to produce

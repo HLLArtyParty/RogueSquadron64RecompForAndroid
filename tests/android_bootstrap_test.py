@@ -179,17 +179,29 @@ def test_android_arm64_and_storage_guards() -> None:
     require(
         "src/main/rt64_render_context.cpp",
         'std::string_view(display_mode) == "horplus"',
-        "app->userConfig.aspectRatio = UC::AspectRatio::Manual;",
-        "app->userConfig.aspectTarget = 16.0 / 9.0;",
-        "app->userConfig.extAspectTarget = 4.0 / 3.0;",
         "app->userConfig.aspectRatio = UC::AspectRatio::Expand;",
+        "app->userConfig.extAspectTarget = 4.0 / 3.0;",
+        "app->userConfig.extAspectTarget = 16.0 / 9.0;",
     )
     require(
-        "lib/rt64/src/hle/rt64_workload_queue.cpp",
-        "extern \"C\" volatile int g_active_overlay;",
-        'std::string_view(displayMode) == "horplus"',
-        "workloadConfig.aspectRatioSource = 4.0f / 3.0f;",
+        "CMakeLists.txt",
+        "setupCameraMatrices=setupCameraMatrices_original",
+        "guPerspective=guPerspective_original",
     )
+    require(
+        "src/main/upstream_compat.cpp",
+        "setupCameraMatrices_original",
+        "guPerspective_original",
+        "void setupCameraMatrices(uint8_t* rdram, recomp_context* ctx)",
+        "void guPerspective(uint8_t* rdram, recomp_context* ctx)",
+        "uint32_t(ctx->r4) == 0x80138D20u",
+        "s_rs64_interactive_camera",
+        "16.0f / 9.0f",
+    )
+    workload_source = (ROOT / "lib/rt64/src/hle/rt64_workload_queue.cpp").read_text(encoding="utf-8")
+    assert "g_active_overlay" not in workload_source
+    assert "ROGUESQ_DISPLAY_MODE" not in workload_source
+    assert "workloadConfig.aspectRatioSource = 4.0f / 3.0f;" not in workload_source
     require(
         "lib/rt64/src/hle/rt64_present_queue.cpp",
         "extern \"C\" volatile int g_active_overlay;",
