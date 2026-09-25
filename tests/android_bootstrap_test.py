@@ -237,7 +237,8 @@ def test_android_arm64_and_storage_guards() -> None:
         "viewport=",
     )
     framebuffer_renderer_source = (ROOT / "lib/rt64/src/render/rt64_framebuffer_renderer.cpp").read_text(encoding="utf-8")
-    assert "useWideViewport = interactiveProjection" not in framebuffer_renderer_source
+    assert "useWideViewport = useWideViewport || interactiveProjection;" in framebuffer_renderer_source
+    assert "useWideViewport = true" not in framebuffer_renderer_source
     workload_source = (ROOT / "lib/rt64/src/hle/rt64_workload_queue.cpp").read_text(encoding="utf-8")
     assert "g_active_overlay" not in workload_source
     assert "ROGUESQ_DISPLAY_MODE" not in workload_source
